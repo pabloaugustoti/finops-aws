@@ -1,0 +1,34 @@
+# ===== Credenciais e segredos (NUNCA versionar) =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+credentials
+config.local.*
+accounts.local.yaml
+.streamlit/secrets.toml
+
+# ===== Dados de custo reais (podem conter IDs de conta) =====
+data/raw/
+data/cache/
+*.parquet
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ===== Editores / SO =====
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
