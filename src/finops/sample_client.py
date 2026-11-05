@@ -41,14 +41,31 @@ SAMPLE_ACCOUNTS: dict[str, tuple[int, float, bool]] = {
     "dados": (13, 0.2, False),
 }
 
+# Rateio do custo por tag em cada conta fictícia: chave -> {valor: fração}.
+# O que falta para 100% é custo SEM a tag (o problema que o showback revela).
+SAMPLE_TAGS: dict[str, dict[str, dict[str, float]]] = {
+    "producao": {"Project": {"loja": 0.58, "checkout": 0.27}, "Environment": {"producao": 0.85}},
+    "desenvolvimento": {"Project": {"loja": 0.5, "checkout": 0.2}, "Environment": {"dev": 0.7}},
+    "dados": {"Project": {"analytics": 0.9}, "Environment": {"producao": 0.9}},
+}
+
 
 class SampleCostExplorerClient:
-    def __init__(self, today: date, seed: int = 42, scale: float = 1.0, spike: bool = True) -> None:
-        """`scale` multiplica todos os custos; `spike` liga o pico simulado de EC2."""
+    def __init__(
+        self,
+        today: date,
+        seed: int = 42,
+        scale: float = 1.0,
+        spike: bool = True,
+        tags: dict[str, dict[str, float]] | None = None,
+    ) -> None:
+        """`scale` multiplica todos os custos; `spike` liga o pico simulado de EC2;
+        `tags` define o rateio usado quando a consulta agrupa por tag."""
         self.today = today
         self.seed = seed
         self.scale = scale
         self.spike = spike
+        self.tags = tags or {}
 
     def daily_cost(self, day: date, service: str) -> Decimal:
         base, weekend_factor, growth = SERVICES[service]
@@ -69,20 +86,20 @@ class SampleCostExplorerClient:
         granularity = params.get("Granularity", "DAILY")
         month_start = self.today.replace(day=1)
 
+        group_by = (params.get("GroupBy") or [{}])[0]
         results = []
         for period_start, period_end in _periods(start, end, granularity):
-            groups = []
-            for service in SERVICES:
-                amount = sum(
-                    (self.daily_cost(day, service) for day in _days(period_start, period_end)),
-                    Decimal("0"),
-                )
-                groups.append(
-                    {
-                        "Keys": [service],
-                        "Metrics": {"UnblendedCost": {"Amount": str(amount), "Unit": "USD"}},
-                    }
-                )
+            by_service = {
+                service: sum((self.daily_cost(day, service) for day in _days(period_start, period_end)), Decimal("0"))
+                for service in SERVICES
+            }
+            if group_by.get("Type") == "TAG":
+                groups = self._tag_groups(group_by["Key"], sum(by_service.values(), Decimal("0")))
+            else:
+                groups = [
+                    {"Keys": [service], "Metrics": {"UnblendedCost": {"Amount": str(amount), "Unit": "USD"}}}
+                    for service, amount in by_service.items()
+                ]
             results.append(
                 {
                     "TimePeriod": {"Start": period_start.isoformat(), "End": period_end.isoformat()},
@@ -96,6 +113,19 @@ class SampleCostExplorerClient:
             "ResultsByTime": results,
             "DimensionValueAttributes": [],
         }
+
+    def _tag_groups(self, key: str, total: Decimal) -> list[dict[str, Any]]:
+        """Grupos no formato da API: "Chave$valor"; "Chave$" é o custo sem a tag."""
+        shares = self.tags.get(key, {})
+        untagged = Decimal(str(round(1 - sum(shares.values()), 6)))
+        pairs = [(value, Decimal(str(share))) for value, share in shares.items()] + [("", untagged)]
+        groups = []
+        for value, share in pairs:
+            if share <= 0:
+                continue
+            amount = str((total * share).quantize(Decimal("0.0001")))
+            groups.append({"Keys": [f"{key}${value}"], "Metrics": {"UnblendedCost": {"Amount": amount, "Unit": "USD"}}})
+        return groups
 
     def get_cost_forecast(self, **params: Any) -> dict[str, Any]:
         start = date.fromisoformat(params["TimePeriod"]["Start"])

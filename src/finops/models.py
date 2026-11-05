@@ -17,6 +17,19 @@ class CostRecord:
     account: str = ""
 
 
+UNTAGGED = "(sem tag)"
+
+
+@dataclass(frozen=True)
+class TagCost:
+    """Custo de um período somado por valor de tag (showback)."""
+
+    account: str
+    tag_key: str
+    value: str  # UNTAGGED quando o recurso não tem a tag
+    amount: Decimal
+
+
 @dataclass(frozen=True)
 class Forecast:
     """Previsão de gasto para um período futuro (fim exclusivo)."""

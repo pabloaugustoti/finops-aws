@@ -14,7 +14,9 @@ from typing import Any
 from finops.anomalies import detect_anomalies
 from finops.collector import CollectionResult
 from finops.inventory import Inventory
+from finops.models import UNTAGGED
 from finops.recommendations import Recommendation, savings_by_rule, total_savings
+from finops.sources import BudgetResult, TagResult
 
 OTHER = "Outros"
 TOP_SERVICES = 5
@@ -152,6 +154,43 @@ def costs_payload(
             for r in sorted(window, key=lambda r: (r.day, r.account, -r.amount), reverse=True)
             if r.amount > 0
         ],
+    }
+
+
+def budgets_payload(result: BudgetResult) -> dict[str, Any]:
+    return {
+        "meta": {"fonte": result.label, "erros": result.errors},
+        "itens": [
+            {
+                "conta": b.account,
+                "nome": b.name,
+                "limite": _money(b.limit),
+                "gasto": _money(b.actual),
+                "previsao": _money(b.forecast) if b.forecast is not None else None,
+                "uso": float(b.used),
+                "uso_previsto": float(b.forecast_ratio) if b.forecast_ratio is not None else None,
+                "situacao": b.status,
+                "periodo": b.period,
+            }
+            for b in sorted(result.budgets, key=lambda b: b.forecast_ratio or b.used, reverse=True)
+        ],
+    }
+
+
+def tags_payload(result: TagResult, *, selected: list[str] | None = None) -> dict[str, Any]:
+    costs = [c for c in result.costs if selected is None or c.account in selected]
+    totals: dict[str, float] = defaultdict(float)
+    for c in costs:
+        totals[c.value] += float(c.amount)
+    total = sum(totals.values())
+    untagged = totals.get(UNTAGGED, 0.0)
+    return {
+        "chave": result.tag_key,
+        "total": round(total, 2),
+        "sem_tag": round(untagged, 2),
+        "cobertura": (1 - untagged / total) if total else None,
+        "valores": _ranked(totals, total),
+        "erros": result.errors,
     }
 
 

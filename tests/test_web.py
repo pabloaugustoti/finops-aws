@@ -110,6 +110,21 @@ def test_api_costs_and_recommendations(base_url):
     assert data["resumo"]["oportunidades"] > 0
 
 
+def test_api_tags_and_budgets(base_url):
+    status, _, body = get(f"{base_url}/api/tags?fonte=exemplo&chave=Environment&dias=30")
+    data = json.loads(body)
+    assert status == 200
+    assert data["chave"] == "Environment"
+    assert data["cobertura"] > 0.8
+
+    status, _, body = get(f"{base_url}/api/orcamentos?fonte=exemplo")
+    assert status == 200
+    assert len(json.loads(body)["itens"]) == 3
+
+    status, _, _ = get(f"{base_url}/api/tags?fonte=exemplo&chave=%3Cscript%3E")
+    assert status == 400
+
+
 def test_weekly_report_download(base_url):
     status, headers, body = get(f"{base_url}/api/relatorio?fonte=exemplo")
     assert status == 200

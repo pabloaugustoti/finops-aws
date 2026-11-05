@@ -13,7 +13,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from finops.cache import JsonCache
-from finops.models import CostRecord, Forecast
+from finops.models import UNTAGGED, CostRecord, Forecast, TagCost
 
 PRICE_PER_REQUEST_USD = Decimal("0.01")
 _UNAVAILABLE = {"_unavailable": True}
@@ -46,6 +46,28 @@ class CostExplorer:
         }
         response = self._request("get_cost_and_usage", params)
         return _parse_cost_and_usage(response, self.account)
+
+    def costs_by_tag(self, start: date, end: date, tag_key: str) -> list[TagCost]:
+        """Custo total do período agrupado pelos valores de uma tag de alocação de custo.
+
+        A AWS devolve as chaves como "Project$loja"; "Project$" é o custo SEM a tag.
+        Na conta real, a tag precisa estar ativada em Billing > Cost allocation tags.
+        """
+        if start >= end:
+            raise ValueError(f"início ({start}) precisa ser anterior ao fim ({end})")
+        params = {
+            "TimePeriod": {"Start": start.isoformat(), "End": end.isoformat()},
+            "Granularity": "MONTHLY",
+            "Metrics": ["UnblendedCost"],
+            "GroupBy": [{"Type": "TAG", "Key": tag_key}],
+        }
+        response = self._request("get_cost_and_usage", params)
+        totals: dict[str, Decimal] = {}
+        for result in response.get("ResultsByTime", []):
+            for group in result.get("Groups", []):
+                value = group["Keys"][0].split("$", 1)[-1] or UNTAGGED
+                totals[value] = totals.get(value, Decimal("0")) + Decimal(group["Metrics"]["UnblendedCost"]["Amount"])
+        return [TagCost(self.account, tag_key, value, amount) for value, amount in totals.items()]
 
     def forecast(self, start: date, end: date) -> Forecast | None:
         """Previsão de gasto entre `start` (hoje ou depois) e `end`.

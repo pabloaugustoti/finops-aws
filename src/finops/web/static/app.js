@@ -33,8 +33,11 @@ const state = {
   busca: "",
   ordem: { chave: "economia_mes", direcao: "desc" },
   tema: fromUrl.tema ?? store.get("tema", "auto"),
+  chaveTag: "Project",
 };
 let costs = null;
+let budgets = null;
+let tags = null;
 let recs = null;
 let recsKey = null;
 
@@ -79,11 +82,83 @@ async function loadCosts(refresh = false) {
     });
     $("status").replaceChildren();
     renderCosts();
+    loadBudgets(refresh);
+    loadTags(refresh);
   } catch (error) {
     showError(error);
   } finally {
     setBusy(false);
   }
+}
+
+// ---------- orçamentos ----------
+const BUDGET_STATUS = {
+  ok: ["ok", "✓ Dentro"],
+  "atenção": ["atencao", "! Atenção"],
+  "vai estourar": ["estoura", "✕ Vai estourar"],
+  estourado: ["estoura", "✕ Estourado"],
+};
+
+async function loadBudgets(refresh = false) {
+  try {
+    budgets = await api("/api/orcamentos", { ...sourceParams(), recarregar: refresh ? "1" : undefined });
+    renderBudgets();
+  } catch (error) {
+    $("orcamentos").replaceChildren(notice("warning", "⚠", `Orçamentos indisponíveis: ${error.message}`));
+  }
+}
+
+function renderBudgets() {
+  if (!budgets) return;
+  const selected = costs?.meta.selecionadas ?? [];
+  const items = budgets.itens.filter((b) => !selected.length || selected.includes(b.conta));
+  const errors = budgets.meta.erros.map((e) => notice("warning", "⚠", `Conta sem acesso aos orçamentos: ${e}`));
+  if (!items.length) {
+    $("orcamentos").replaceChildren(...errors, h("p", { class: "card__hint" },
+      "Nenhum orçamento de custo encontrado. Crie um em Billing > Budgets."));
+    return;
+  }
+  $("orcamentos").replaceChildren(...errors, ...items.map((b) => {
+    const [kind, label] = BUDGET_STATUS[b.situacao] ?? ["ok", b.situacao];
+    const scale = Math.max(b.limite, b.previsao ?? 0, b.gasto) || 1; // a barra cabe o que for maior
+    const pct = (v) => `${Math.min(100, (v / scale) * 100)}%`;
+    const forecast = b.previsao === null ? "previsão indisponível"
+      : `previsão ${fmtMoney(b.previsao)} (${fmtPct(b.uso_previsto)})`;
+    return h("div", { class: `budget budget--${kind}` },
+      h("div", { class: "budget__top" },
+        h("span", { class: "budget__name", title: b.nome }, b.nome, h("span", { class: "budget__account" }, b.conta)),
+        h("span", { class: `status status--${kind}` }, label)),
+      h("div", {
+        class: "budget__track", role: "img",
+        "aria-label": `${b.nome}: ${fmtMoney(b.gasto)} de ${fmtMoney(b.limite)}, ${forecast}`,
+      },
+        h("span", { class: "budget__fill", style: { width: pct(b.gasto) } }),
+        b.previsao === null ? null : h("span", { class: "budget__forecast", title: "Previsão", style: { left: pct(b.previsao) } }),
+        h("span", { class: "budget__limit", title: "Limite", style: { left: pct(b.limite), right: "auto" } })),
+      h("div", { class: "budget__meta" },
+        `${fmtMoney(b.gasto)} de ${fmtMoney(b.limite)} (${fmtPct(b.uso)}) · ${forecast}`));
+  }));
+}
+
+// ---------- custo por tag ----------
+async function loadTags(refresh = false) {
+  try {
+    tags = await api("/api/tags", {
+      ...sourceParams(), dias: state.dias, chave: state.chaveTag,
+      contas: state.contas?.join(",") || undefined, recarregar: refresh ? "1" : undefined,
+    });
+    renderTags();
+  } catch (error) {
+    $("barras-tag").replaceChildren(notice("warning", "⚠", `Custo por tag indisponível: ${error.message}`));
+  }
+}
+
+function renderTags() {
+  if (!tags) return;
+  $("tags-cobertura").textContent = tags.cobertura === null
+    ? "Sem custo no período (na conta real, ative a tag em Billing > Cost allocation tags)"
+    : `${fmtPct(tags.cobertura)} do custo tem a tag "${tags.chave}" · sem tag: ${fmtMoney(tags.sem_tag)}`;
+  hbars($("barras-tag"), tags.valores, { color: (item) => (item.nome === "(sem tag)" ? "var(--other)" : "var(--s3)") });
 }
 
 function renderAccountChips(meta) {
@@ -127,7 +202,8 @@ function renderCosts() {
   );
 
   const hasData = kpis.total > 0;
-  document.querySelectorAll("#painel-custos .card").forEach((card) => { card.hidden = !hasData; });
+  // sem custo, os gráficos somem; os orçamentos continuam (o limite existe mesmo com gasto zero)
+  document.querySelectorAll("#painel-custos .card:not(#card-orcamentos)").forEach((card) => { card.hidden = !hasData; });
   if (!hasData) {
     $("anomalias").replaceChildren(h("div", { class: "card empty" },
       h("strong", {}, "Nenhum custo no período"),
@@ -345,6 +421,14 @@ function bind() {
     const next = state.aba === "custos" ? "recs" : "custos";
     selectTab(next);
     $(next === "custos" ? "aba-custos" : "aba-recs").focus();
+  });
+
+  $("filtro-tag").addEventListener("click", (e) => {
+    const button = e.target.closest("button");
+    if (!button) return;
+    state.chaveTag = button.dataset.chave;
+    document.querySelectorAll("#filtro-tag button").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    loadTags();
   });
 
   $("filtro-categoria").addEventListener("click", (e) => {

@@ -1,19 +1,22 @@
-"""Fontes de dados (custos e inventário), compartilhadas pela CLI e pela interface web."""
+"""Fontes de dados (custos, tags, orçamentos e inventário), compartilhadas pela CLI e pela interface web."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from finops.accounts import load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
+from finops.budgets import Budget, fetch_budgets, sample_budgets
 from finops.cache import JsonCache
 from finops.collector import ClientFactory, CollectionResult, collect
+from finops.cost_explorer import CostExplorer
 from finops.inventory import Inventory, collect_inventory
-from finops.sample_client import SAMPLE_ACCOUNTS, SampleCostExplorerClient
+from finops.models import TagCost
+from finops.sample_client import SAMPLE_ACCOUNTS, SAMPLE_TAGS, SampleCostExplorerClient
 from finops.sample_inventory import sample_inventory
 
 SOURCE_KINDS = ("exemplo", "aws", "contas")
@@ -44,6 +47,11 @@ def collection_window(today: date, days: int) -> Window:
     return Window(start=min(today - timedelta(days=days), month_start), end=today, forecast_end=next_month)
 
 
+def sample_client(name: str, today: date) -> SampleCostExplorerClient:
+    seed, scale, spike = SAMPLE_ACCOUNTS[name]
+    return SampleCostExplorerClient(today=today, seed=seed, scale=scale, spike=spike, tags=SAMPLE_TAGS.get(name))
+
+
 def _aws_sessions(kind: str, profile: str, config_path: Path) -> tuple[list[str], SessionFactory, str]:
     """Contas e uma fábrica de sessões boto3 para as fontes reais."""
     if kind == "aws":
@@ -65,12 +73,7 @@ def build_source(
     config_path: Path = DEFAULT_ACCOUNTS_FILE,
 ) -> Source:
     if kind == "exemplo":
-
-        def sample_factory(name: str) -> SampleCostExplorerClient:
-            seed, scale, spike = SAMPLE_ACCOUNTS[name]
-            return SampleCostExplorerClient(today=today, seed=seed, scale=scale, spike=spike)
-
-        return Source(list(SAMPLE_ACCOUNTS), sample_factory, "dados de exemplo", paid=False)
+        return Source(list(SAMPLE_ACCOUNTS), lambda name: sample_client(name, today), "dados de exemplo", paid=False)
 
     names, sessions, label = _aws_sessions(kind, profile, config_path)
     return Source(names, lambda name: sessions(name).client("ce", region_name=BILLING_REGION), label, paid=True)
@@ -89,6 +92,65 @@ def run_collection(
         forecast_end=window.forecast_end,
         cache=cache,
     )
+
+
+@dataclass
+class TagResult:
+    tag_key: str
+    costs: list[TagCost] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    api_calls: int = 0
+
+
+def run_tags(
+    source: Source,
+    today: date,
+    days: int,
+    tag_key: str,
+    *,
+    use_cache: bool = True,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+) -> TagResult:
+    """Custo do período por valor de tag, em cada conta (uma conta com erro não derruba as outras)."""
+    cache = JsonCache(cache_dir) if source.paid and use_cache else None
+    result = TagResult(tag_key)
+    for name in source.names:
+        explorer: CostExplorer | None = None
+        try:
+            explorer = CostExplorer(source.factory(name), cache=cache, account=name)
+            result.costs += explorer.costs_by_tag(today - timedelta(days=days), today, tag_key)
+        except Exception as error:  # noqa: BLE001
+            result.errors.append(f"{name}: {str(error).splitlines()[0]}")
+        if explorer is not None:
+            result.api_calls += explorer.api_calls
+    return result
+
+
+@dataclass
+class BudgetResult:
+    label: str
+    budgets: list[Budget] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+def load_budgets(
+    kind: str, today: date, *, profile: str = "finops-lab", config_path: Path = DEFAULT_ACCOUNTS_FILE
+) -> BudgetResult:
+    """Orçamentos de cada conta (AWS Budgets é gratuito para leitura)."""
+    if kind == "exemplo":
+        result = BudgetResult("dados de exemplo")
+        for name in SAMPLE_ACCOUNTS:
+            result.budgets += sample_budgets(name, sample_client(name, today), today)
+        return result
+
+    names, sessions, label = _aws_sessions(kind, profile, config_path)
+    result = BudgetResult(label)
+    for name in names:
+        try:
+            result.budgets += fetch_budgets(sessions(name), name)
+        except Exception as error:  # noqa: BLE001
+            result.errors.append(f"{name}: {str(error).splitlines()[0]}")
+    return result
 
 
 @dataclass(frozen=True)

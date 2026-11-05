@@ -13,12 +13,13 @@ from finops.anomalies import AnomalyEvent, detect_anomalies
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
-from finops.models import CostRecord
+from finops.models import UNTAGGED, CostRecord
 from finops.recommendations import analyze
 from finops.report import (
     build_summary,
     export_csv,
     export_recommendations_csv,
+    fmt_pct,
     fmt_usd,
     render_recommendations,
     render_text,
@@ -29,8 +30,10 @@ from finops.sources import (
     SOURCE_KINDS,
     build_inventory_source,
     build_source,
+    load_budgets,
     run_collection,
     run_inventory,
+    run_tags,
 )
 from finops.weekly_report import build_weekly_report
 
@@ -94,6 +97,19 @@ def build_parser() -> argparse.ArgumentParser:
     weekly.add_argument("--regioes", help="regiões do inventário, separadas por vírgula (padrão: todas)")
     weekly.add_argument("--saida", type=Path, help="arquivo .md de saída (padrão: imprime na tela)")
     weekly.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
+    budgets = commands.add_parser("orcamentos", help="orçamentos (AWS Budgets): limite × gasto × previsão")
+    budgets.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo")
+    budgets.add_argument("--perfil", default="finops-lab")
+    budgets.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+
+    tags = commands.add_parser("tags", help="custo por valor de tag (showback por projeto, ambiente...)")
+    tags.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo")
+    tags.add_argument("--perfil", default="finops-lab")
+    tags.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    tags.add_argument("--chave", default="Project", help="chave da tag (padrão: Project)")
+    tags.add_argument("--dias", type=int, default=30)
+    tags.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
 
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
@@ -205,6 +221,50 @@ def run_weekly_report(args: argparse.Namespace, today: date) -> int:
     return 0
 
 
+BUDGET_ICON = {"ok": "✓", "atenção": "!", "vai estourar": "✕", "estourado": "✕"}
+
+
+def run_budgets(args: argparse.Namespace, today: date) -> int:
+    result = load_budgets(args.fonte, today, profile=args.perfil, config_path=args.config)
+    print(f"FinOps AWS: orçamentos (fonte: {result.label})\n")
+    if not result.budgets:
+        print("Nenhum orçamento de custo encontrado. Crie um em Billing > Budgets.")
+    for b in sorted(result.budgets, key=lambda b: b.forecast_ratio or b.used, reverse=True):
+        forecast = "previsão indisponível" if b.forecast is None else f"previsão {fmt_usd(b.forecast)}"
+        print(f"  [{BUDGET_ICON[b.status]}] {b.status:<12} {b.account} · {b.name}")
+        print(f"      {fmt_usd(b.actual)} de {fmt_usd(b.limit)} ({fmt_pct(b.used, 0)} usado) · {forecast}")
+    for message in result.errors:
+        print(f"\n⚠ {message}")
+    return 0
+
+
+def run_tags_command(args: argparse.Namespace, today: date) -> int:
+    if not 1 <= args.dias <= 365:
+        print("erro: --dias precisa estar entre 1 e 365", file=sys.stderr)
+        return 2
+    source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
+    result = run_tags(source, today, args.dias, args.chave, cache_dir=args.cache_dir)
+    totals: dict[str, Decimal] = {}
+    for c in result.costs:
+        totals[c.value] = totals.get(c.value, Decimal("0")) + c.amount
+    total = sum(totals.values(), Decimal("0"))
+    print(f"FinOps AWS: custo por tag '{args.chave}' nos últimos {args.dias} dias (fonte: {source.label})\n")
+    if not total:
+        print("Nenhum custo no período (ou a tag ainda não foi ativada em Billing > Cost allocation tags).")
+    for value, amount in sorted(totals.items(), key=lambda kv: kv[1], reverse=True):
+        share = fmt_pct(amount / total) if total else "-"
+        print(f"  {value:<20} {fmt_usd(amount):>14}  {share:>6}")
+    if total:
+        untagged = totals.get(UNTAGGED, Decimal("0"))
+        print(f"\n  Cobertura de tags: {fmt_pct(1 - untagged / total)} do custo tem a tag '{args.chave}'")
+    for message in result.errors:
+        print(f"\n⚠ {message}")
+    if source.paid:
+        cost = fmt_usd(result.api_calls * PRICE_PER_REQUEST_USD)
+        print(f"\nChamadas pagas ao Cost Explorer: {result.api_calls} (~{cost})")
+    return 0
+
+
 def run_check(args: argparse.Namespace) -> int:
     config = load_accounts(args.config)
     sts = profile_session(config.hub_profile).client("sts", region_name=BILLING_REGION)
@@ -252,6 +312,10 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
             return run_check(args)
         if args.command == "recomendacoes":
             return run_recommendations(args)
+        if args.command == "orcamentos":
+            return run_budgets(args, today or utc_today())
+        if args.command == "tags":
+            return run_tags_command(args, today or utc_today())
         if args.command == "anomalias":
             return run_anomalies(args, today or utc_today())
         if args.command == "relatorio":

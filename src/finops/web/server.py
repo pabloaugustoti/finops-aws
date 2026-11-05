@@ -4,16 +4,19 @@ Rotas:
     GET /                     -> interface (static/index.html)
     GET /static/<arquivo>     -> CSS, JS e ícone
     GET /api/custos           -> custos agregados (?fonte=&perfil=&dias=&contas=a,b&recarregar=1)
+    GET /api/tags             -> custo por valor de tag, showback (?chave=Project&dias=&contas=)
+    GET /api/orcamentos       -> orçamentos: limite × gasto × previsão
     GET /api/recomendacoes    -> recomendações de economia (?fonte=&perfil=&regioes=&recarregar=1)
     GET /api/relatorio        -> relatório semanal em Markdown (download)
 
-Segurança: escuta só em 127.0.0.1, aceita só GET, bloqueia caminhos fora de
+Segurança: escuta só em 127.0.0.1 (por padrão), aceita só GET, bloqueia caminhos fora de
 static/ e envia cabeçalhos que impedem conteúdo externo (CSP 'self').
 """
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -32,16 +35,21 @@ from finops.recommendations import Recommendation, analyze
 from finops.sources import (
     DEFAULT_ACCOUNTS_FILE,
     SOURCE_KINDS,
+    BudgetResult,
     InventorySource,
     Source,
+    TagResult,
     build_inventory_source,
     build_source,
+    load_budgets,
     run_collection,
     run_inventory,
+    run_tags,
 )
-from finops.web.api import costs_payload, recommendations_payload
+from finops.web.api import budgets_payload, costs_payload, recommendations_payload, tags_payload
 from finops.weekly_report import build_weekly_report
 
+TAG_KEY = re.compile(r"[A-Za-z0-9 _.:/=+@-]{1,128}")  # caracteres permitidos pela AWS em chaves de tag
 STATIC_DIR = Path(__file__).parent / "static"
 FETCH_DAYS = 90  # busca 90 dias de uma vez; trocar o período na tela não gera chamadas pagas
 CACHE_TTL_SECONDS = 3600
@@ -113,17 +121,52 @@ class FinOpsApp:
         source, result = self.cache.get_or_load(("custos", kind, profile, today), load, refresh)
         return today, source, result
 
-    def costs(self, query: dict[str, list[str]]) -> dict[str, Any]:
-        kind, profile = self._source_params(query)
+    @staticmethod
+    def _days(query: dict[str, list[str]]) -> int:
         try:
             days = int(_one(query, "dias", "30"))
         except ValueError:
             raise BadRequestError("dias precisa ser um número") from None
         if days not in PERIODS:
             raise BadRequestError(f"dias precisa ser um de {sorted(PERIODS)}")
-        selected = [c for c in _one(query, "contas", "").split(",") if c] or None
+        return days
+
+    @staticmethod
+    def _accounts(query: dict[str, list[str]]) -> list[str] | None:
+        return [c for c in _one(query, "contas", "").split(",") if c] or None
+
+    def costs(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        kind, profile = self._source_params(query)
+        days = self._days(query)
         today, source, result = self._collection(kind, profile, "recarregar" in query)
-        return costs_payload(result, today=today, days=days, label=source.label, paid=source.paid, selected=selected)
+        return costs_payload(
+            result, today=today, days=days, label=source.label, paid=source.paid, selected=self._accounts(query)
+        )
+
+    def tags(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        kind, profile = self._source_params(query)
+        days = self._days(query)
+        key = _one(query, "chave", "Project")
+        if not TAG_KEY.fullmatch(key):
+            raise BadRequestError("chave de tag inválida")
+        today = self._today()
+
+        def load() -> TagResult:
+            source = build_source(kind, today, profile=profile, config_path=self.config_path)
+            return run_tags(source, today, days, key)
+
+        result = self.cache.get_or_load(("tags", kind, profile, today, days, key), load, "recarregar" in query)
+        return tags_payload(result, selected=self._accounts(query))
+
+    def budgets(self, query: dict[str, list[str]]) -> dict[str, Any]:
+        kind, profile = self._source_params(query)
+        today = self._today()
+
+        def load() -> BudgetResult:
+            return load_budgets(kind, today, profile=profile, config_path=self.config_path)
+
+        result = self.cache.get_or_load(("orcamentos", kind, profile, today), load, "recarregar" in query)
+        return budgets_payload(result)
 
     def _inventory(
         self, kind: str, profile: str, regions: list[str] | None, refresh: bool
@@ -201,6 +244,10 @@ def make_handler(app: FinOpsApp) -> type[BaseHTTPRequestHandler]:
                     self._static(url.path.removeprefix("/static/"))
                 elif url.path == "/api/custos":
                     self._json(HTTPStatus.OK, app.costs(query))
+                elif url.path == "/api/tags":
+                    self._json(HTTPStatus.OK, app.tags(query))
+                elif url.path == "/api/orcamentos":
+                    self._json(HTTPStatus.OK, app.budgets(query))
                 elif url.path == "/api/recomendacoes":
                     self._json(HTTPStatus.OK, app.recommendations(query))
                 elif url.path == "/api/relatorio":

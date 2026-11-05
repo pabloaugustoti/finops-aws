@@ -258,12 +258,13 @@ export function monthLine(container, mes, { height = 280 } = {}) {
 
 export function hbars(container, items, { color = "var(--s1)", valueFormat = fmtMoney, extra } = {}) {
   const max = Math.max(...items.map((i) => i.valor), 0) || 1;
+  const colorOf = typeof color === "function" ? color : () => color; // cor fixa ou por item
   container.replaceChildren(
     ...items.map((item) =>
       h("div", { class: "hbar" },
         h("span", { class: "hbar__label", title: item.nome }, item.nome),
         h("span", { class: "hbar__track" },
-          h("span", { class: "hbar__bar", style: { width: `${Math.max(0.6, (item.valor / max) * 78)}%`, background: color } }),
+          h("span", { class: "hbar__bar", style: { width: `${Math.max(0.6, (item.valor / max) * 78)}%`, background: colorOf(item) } }),
           h("span", { class: "hbar__value" }, valueFormat(item.valor),
             h("span", { class: "hbar__share" }, extra ? extra(item) : fmtPct(item.participacao)))))),
   );

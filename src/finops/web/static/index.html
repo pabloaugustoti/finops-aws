@@ -104,6 +104,29 @@
         </article>
       </div>
 
+      <div class="grid-2">
+        <article class="card" id="card-orcamentos">
+          <header class="card__header">
+            <h2>Orçamentos</h2>
+            <p class="card__hint">Gasto do mês × limite do AWS Budgets · a linha marca a previsão</p>
+          </header>
+          <div class="budgets" id="orcamentos"></div>
+        </article>
+        <article class="card" id="card-tags">
+          <header class="card__header card__header--row">
+            <div>
+              <h2>Custo por tag</h2>
+              <p class="card__hint" id="tags-cobertura">Showback por projeto ou ambiente</p>
+            </div>
+            <div class="segmented" id="filtro-tag">
+              <button type="button" data-chave="Project" aria-pressed="true">Projeto</button>
+              <button type="button" data-chave="Environment">Ambiente</button>
+            </div>
+          </header>
+          <div class="hbars" id="barras-tag"></div>
+        </article>
+      </div>
+
       <article class="card">
         <header class="card__header">
           <h2>Mês atual: acumulado e previsão</h2>

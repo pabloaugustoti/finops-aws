@@ -70,6 +70,11 @@ def fmt_usd(value: Decimal) -> str:
     return f"US$ {text}"
 
 
+def fmt_pct(ratio: float | Decimal, decimals: int = 1) -> str:
+    """Formata no padrão brasileiro: 0.672 -> 67,2%."""
+    return f"{float(ratio) * 100:.{decimals}f}%".replace(".", ",")
+
+
 def sparkline(values: list[Decimal]) -> str:
     if not values:
         return ""
