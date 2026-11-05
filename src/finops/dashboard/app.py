@@ -5,7 +5,7 @@ Rode a partir da raiz do projeto:  python -m finops dashboard
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from finops.accounts import ConfigError
+from finops.anomalies import detect_anomalies
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
 from finops.dashboard.data import (
     OTHER,
@@ -115,10 +116,11 @@ def with_money(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(valor=df["custo"].map(lambda v: fmt_usd(Decimal(str(round(v, 2))))))
 
 
-def daily_chart(daily: pd.DataFrame, order: list[str], colors: dict) -> alt.Chart:
+def daily_chart(daily: pd.DataFrame, order: list[str], colors: dict,
+                anomaly_days: list[date] | None = None) -> alt.Chart:
     palette = [colors["other"] if s == OTHER else colors["series"][i] for i, s in enumerate(order)]
     data = with_money(daily).assign(dia_txt=daily["dia"].dt.strftime("%d/%m/%Y"))
-    chart = alt.Chart(data).mark_bar(stroke=colors["surface"], strokeWidth=1).encode(
+    bars = alt.Chart(data).mark_bar(stroke=colors["surface"], strokeWidth=1).encode(
         x=alt.X("dia:T", axis=date_axis()),
         y=alt.Y("sum(custo):Q", axis=money_axis("US$ por dia")),
         color=alt.Color("servico:N", scale=alt.Scale(domain=order, range=palette), sort=order,
@@ -127,7 +129,18 @@ def daily_chart(daily: pd.DataFrame, order: list[str], colors: dict) -> alt.Char
         tooltip=[alt.Tooltip("dia_txt:N", title="Dia"), alt.Tooltip("servico:N", title="Serviço"),
                  alt.Tooltip("valor:N", title="Custo")],
     )
-    return style(chart, colors, 340)
+    if not anomaly_days:
+        return style(bars, colors, 340)
+
+    # Marcador "⚠ anomalia" acima da barra total dos dias anômalos (ícone + rótulo, não só cor)
+    totals = daily.groupby("dia", as_index=False)["custo"].sum()
+    marks = totals[totals["dia"].isin(pd.to_datetime(anomaly_days))]
+    marks = with_money(marks).assign(dia_txt=marks["dia"].dt.strftime("%d/%m/%Y"), rotulo="⚠")
+    flags = alt.Chart(marks).mark_text(dy=-10, fontSize=15, color=colors["text"]).encode(
+        x="dia:T", y="custo:Q", text="rotulo:N",
+        tooltip=[alt.Tooltip("dia_txt:N", title="Anomalia em"), alt.Tooltip("valor:N", title="Total do dia")],
+    )
+    return style(alt.layer(bars, flags), colors, 340)
 
 
 def ranking_chart(table: pd.DataFrame, column: str, title: str, colors: dict,
@@ -180,7 +193,7 @@ def sidebar() -> tuple[str, str, str, int]:
     if kind != "exemplo":
         st.sidebar.caption("Cada consulta nova ao Cost Explorer custa US$ 0,01. "
                            "Respostas repetidas vêm do cache em `data/cache/`.")
-    if st.sidebar.button("Recarregar dados", use_container_width=True):
+    if st.sidebar.button("Recarregar dados", width="stretch"):
         load.clear()
         load_recommendations.clear()
     days = st.sidebar.select_slider("Período (dias)", options=PERIOD_OPTIONS, value=30)
@@ -242,7 +255,7 @@ def recommendations_tab(kind: str, profile: str, config: str, colors: dict) -> N
         )
         by_rule["participacao"] = by_rule["custo"] / by_rule["custo"].sum()
         st.altair_chart(ranking_chart(by_rule, "tipo", "Tipo", colors, x_title="US$ por mês"),
-                        use_container_width=True, theme=None)
+                        width="stretch", theme=None)
 
     st.subheader("Recomendações")
     categories = st.segmented_control("Mostrar", ["economia", "governança"], default=["economia", "governança"],
@@ -254,7 +267,7 @@ def recommendations_tab(kind: str, profile: str, config: str, colors: dict) -> N
         "Conta": r.account, "Região": r.region, "Recurso": r.resource_id,
         "Recomendação": r.title, "Detalhe": r.detail, "Ação sugerida": r.action,
     } for r in shown])
-    st.dataframe(table, use_container_width=True, hide_index=True, column_config={
+    st.dataframe(table, width="stretch", hide_index=True, column_config={
         "Economia/mês (US$)": st.column_config.NumberColumn(format="%.2f"),
         "Detalhe": st.column_config.TextColumn(width="large"),
         "Ação sugerida": st.column_config.TextColumn(width="large"),
@@ -325,28 +338,45 @@ def costs_tab(kind: str, profile: str, config: str, days: int, colors: dict, tod
                 "Use **Dados de exemplo** na barra lateral para ver o dashboard completo.")
         return
 
+    selected_records = [r for r in data["records"] if r.account in selected]
+    cutoff = today - timedelta(days=days)
+    events = [e for e in detect_anomalies(selected_records) if e.end >= cutoff]
+    anomaly_days = sorted({d.day for e in events for d in e.days})
+
     order = service_order(in_window(all_df, today, days))
     st.subheader("Custo diário por serviço")
-    st.altair_chart(daily_chart(daily_by_service(window, order, today, days), order, colors),
-                    use_container_width=True, theme=None)
+    st.altair_chart(daily_chart(daily_by_service(window, order, today, days), order, colors, anomaly_days),
+                    width="stretch", theme=None)
+
+    if events:
+        st.subheader(f"⚠ Anomalias detectadas ({len(events)})")
+        for e in events:
+            period = e.start.strftime("%d/%m") if e.start == e.end else f"{e.start:%d/%m} a {e.end:%d/%m}"
+            peak, expected = fmt_usd(Decimal(str(round(e.peak.amount, 2)))), fmt_usd(Decimal(str(round(e.peak.expected, 2))))
+            text = (f"**{period} · {e.account} · {e.service}**: custo extra de **{fmt_usd(e.impact)}**. "
+                    f"Pico de {peak} por dia, quando o esperado era {expected}.")
+            # "\$": no markdown do Streamlit, um par de $ vira fórmula LaTeX
+            (st.error if e.severity == "alta" else st.warning)(text.replace("$", "\\$"), icon="⚠️")
+        st.caption("Método: mediana e MAD dos 14 dias anteriores de cada conta + serviço (z robusto ≥ 3,5, "
+                   "impacto ≥ US\\$ 1 e ≥ 30%).")
 
     left, right = st.columns(2)
     with left:
         st.subheader("Por conta")
         st.altair_chart(ranking_chart(totals_by(window, "conta"), "conta", "Conta", colors),
-                        use_container_width=True, theme=None)
+                        width="stretch", theme=None)
     with right:
         st.subheader("Top 10 serviços")
         st.altair_chart(ranking_chart(totals_by(window, "servico").head(10), "servico", "Serviço", colors),
-                        use_container_width=True, theme=None)
+                        width="stretch", theme=None)
 
     st.subheader("Mês atual: acumulado e previsão")
     st.altair_chart(projection_chart(month_projection(df, today, forecast), colors),
-                    use_container_width=True, theme=None)
+                    width="stretch", theme=None)
 
     with st.expander("Tabela detalhada"):
         table = window.sort_values(["dia", "conta", "custo"], ascending=[False, True, False])
-        st.dataframe(table, use_container_width=True, hide_index=True, column_config={
+        st.dataframe(table, width="stretch", hide_index=True, column_config={
             "dia": st.column_config.DateColumn("Dia", format="DD/MM/YYYY"),
             "conta": "Conta", "servico": "Serviço",
             "custo": st.column_config.NumberColumn("Custo (US$)", format="%.4f"),

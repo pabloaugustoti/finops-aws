@@ -5,14 +5,17 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from finops.accounts import ConfigError, load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
+from finops.anomalies import detect_anomalies
 from finops.recommendations import analyze
+from finops.weekly_report import build_weekly_report
 from finops.report import (
     build_summary,
     export_csv,
@@ -66,6 +69,23 @@ def build_parser() -> argparse.ArgumentParser:
     recs.add_argument("--regioes", help="regiões separadas por vírgula (padrão: todas as habilitadas)")
     recs.add_argument("--csv", type=Path, help="exporta todas as recomendações para CSV")
 
+    anomalies = commands.add_parser("anomalias", help="detecta dias com custo fora do padrão")
+    anomalies.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo")
+    anomalies.add_argument("--perfil", default="finops-lab")
+    anomalies.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    anomalies.add_argument("--dias", type=int, default=30, help="mostra eventos dos últimos N dias (padrão: 30)")
+    anomalies.add_argument("--sensibilidade", type=float, default=3.5,
+                           help="z robusto mínimo; menor = mais alertas (padrão: 3.5)")
+    anomalies.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
+    weekly = commands.add_parser("relatorio", help="relatório semanal em Markdown (custos, anomalias, economia)")
+    weekly.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo")
+    weekly.add_argument("--perfil", default="finops-lab")
+    weekly.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    weekly.add_argument("--regioes", help="regiões do inventário, separadas por vírgula (padrão: todas)")
+    weekly.add_argument("--saida", type=Path, help="arquivo .md de saída (padrão: imprime na tela)")
+    weekly.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
 
@@ -108,6 +128,56 @@ def run_recommendations(args: argparse.Namespace) -> int:
     if args.csv:
         export_recommendations_csv(recs, args.csv)
         print(f"\nCSV salvo em {args.csv}")
+    return 0
+
+
+# Histórico usado na detecção: janela pedida + linha de base (14 dias) + folga
+ANOMALY_HISTORY_DAYS = 90
+
+
+def _recent_anomalies(records, today: date, days: int, threshold: float = 3.5):
+    cutoff = today - timedelta(days=days)
+    return [e for e in detect_anomalies(records, threshold=threshold) if e.end >= cutoff]
+
+
+def run_anomalies(args: argparse.Namespace, today: date) -> int:
+    source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
+    result = run_collection(source, today, ANOMALY_HISTORY_DAYS, cache_dir=args.cache_dir)
+    events = _recent_anomalies(result.records, today, args.dias, args.sensibilidade)
+
+    print(f"FinOps AWS: anomalias de custo nos últimos {args.dias} dias (fonte: {source.label})")
+    print(f"Método: mediana e MAD dos 14 dias anteriores, z robusto >= {args.sensibilidade}\n")
+    if not events:
+        print("Nenhuma anomalia detectada. ✅")
+    for e in events:
+        period = e.start.isoformat() if e.start == e.end else f"{e.start.isoformat()} a {e.end.isoformat()}"
+        print(f"  [{e.severity.upper():5}] {period}  {e.account} · {e.service}")
+        print(f"          custo extra: {fmt_usd(e.impact)}  ·  pico {fmt_usd(Decimal(str(round(e.peak.amount, 2))))} "
+              f"vs. esperado {fmt_usd(Decimal(str(round(e.peak.expected, 2))))}  ·  "
+              f"z = {f'{e.peak.zscore:.1f}'.replace('.', ',')}")
+    for message in result.errors:
+        print(f"\n⚠ {message}")
+    return 0
+
+
+def run_weekly_report(args: argparse.Namespace, today: date) -> int:
+    source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
+    result = run_collection(source, today, ANOMALY_HISTORY_DAYS, cache_dir=args.cache_dir)
+    regions = [r.strip() for r in args.regioes.split(",") if r.strip()] if args.regioes else None
+    inventory_source = build_inventory_source(args.fonte, profile=args.perfil, config_path=args.config,
+                                              regions=regions)
+    recs = analyze(run_inventory(inventory_source), datetime.now(timezone.utc))
+    markdown = build_weekly_report(
+        result.records, today=today, source=source.label,
+        anomalies=_recent_anomalies(result.records, today, 30), recommendations=recs,
+        forecast_amount=result.forecast_amount,
+    )
+    if args.saida:
+        args.saida.parent.mkdir(parents=True, exist_ok=True)
+        args.saida.write_text(markdown, encoding="utf-8")
+        print(f"Relatório salvo em {args.saida}")
+    else:
+        print(markdown)
     return 0
 
 
@@ -164,6 +234,10 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
             return run_check(args)
         if args.command == "recomendacoes":
             return run_recommendations(args)
+        if args.command == "anomalias":
+            return run_anomalies(args, today or utc_today())
+        if args.command == "relatorio":
+            return run_weekly_report(args, today or utc_today())
         return run_summary(args, today or utc_today())
     except ConfigError as error:
         print(f"erro de configuração: {error}", file=sys.stderr)
