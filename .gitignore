@@ -8,7 +8,6 @@
 credentials
 config.local.*
 accounts.local.toml
-.streamlit/secrets.toml
 
 # ===== Dados de custo reais (podem conter IDs de conta) =====
 data/raw/

@@ -1,4 +1,4 @@
-"""Fontes de dados (custos e inventário), compartilhadas pela CLI e pelo dashboard."""
+"""Fontes de dados (custos e inventário), compartilhadas pela CLI e pela interface web."""
 
 from __future__ import annotations
 

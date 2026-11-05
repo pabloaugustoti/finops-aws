@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -11,11 +10,10 @@ from pathlib import Path
 
 from finops.accounts import ConfigError, load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
+from finops.anomalies import detect_anomalies
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
-from finops.anomalies import detect_anomalies
 from finops.recommendations import analyze
-from finops.weekly_report import build_weekly_report
 from finops.report import (
     build_summary,
     export_csv,
@@ -33,8 +31,7 @@ from finops.sources import (
     run_collection,
     run_inventory,
 )
-
-DASHBOARD_APP = Path(__file__).parent / "dashboard" / "app.py"
+from finops.weekly_report import build_weekly_report
 
 
 def utc_today() -> date:
@@ -89,8 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
 
-    dashboard = commands.add_parser("dashboard", help="abre o dashboard no navegador (Streamlit)")
-    dashboard.add_argument("--porta", type=int, default=8501)
+    web = commands.add_parser("web", help="abre a interface web própria (HTML/CSS/JS) em 127.0.0.1")
+    web.add_argument("--porta", type=int, default=8000)
+    web.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    web.add_argument("--sem-navegador", action="store_true", help="não abre o navegador automaticamente")
 
     clear = commands.add_parser("limpar-cache", help="apaga as respostas da AWS guardadas em cache")
     clear.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
@@ -205,15 +204,6 @@ def run_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
-def run_dashboard(args: argparse.Namespace) -> int:
-    command = [sys.executable, "-m", "streamlit", "run", str(DASHBOARD_APP),
-               "--server.port", str(args.porta), "--browser.gatherUsageStats", "false"]
-    try:
-        return subprocess.call(command)
-    except KeyboardInterrupt:
-        return 0
-
-
 def main(argv: list[str] | None = None, today: date | None = None) -> int:
     # Garante que os caracteres de gráfico (█ ▁▂▃) não quebrem consoles antigos do Windows.
     if hasattr(sys.stdout, "reconfigure"):
@@ -224,8 +214,11 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
         removed = JsonCache(args.cache_dir).clear()
         print(f"{removed} arquivo(s) removido(s) de {args.cache_dir}")
         return 0
-    if args.command == "dashboard":
-        return run_dashboard(args)
+    if args.command == "web":
+        from finops.web.server import serve
+
+        serve(port=args.porta, config_path=args.config, open_browser=not args.sem_navegador)
+        return 0
 
     from botocore.exceptions import BotoCoreError, ClientError
 
