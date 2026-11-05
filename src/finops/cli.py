@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from finops.accounts import ConfigError, load_accounts
+from finops.anomalies import AnomalyEvent, detect_anomalies
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
-from finops.anomalies import detect_anomalies
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
+from finops.models import CostRecord
 from finops.recommendations import analyze
 from finops.report import (
     build_summary,
@@ -36,7 +37,7 @@ from finops.weekly_report import build_weekly_report
 
 def utc_today() -> date:
     # O faturamento da AWS usa dias em UTC.
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,13 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     summary = commands.add_parser("resumo", help="resumo de custos por conta e serviço")
     summary.add_argument(
-        "--fonte", choices=SOURCE_KINDS, default="exemplo",
+        "--fonte",
+        choices=SOURCE_KINDS,
+        default="exemplo",
         help="'exemplo': dados fictícios de 3 contas; 'aws': só a conta do --perfil; "
-             "'contas': todas as contas do --config via AssumeRole (padrão: exemplo)",
+        "'contas': todas as contas do --config via AssumeRole (padrão: exemplo)",
     )
     summary.add_argument("--perfil", default="finops-lab", help="perfil do AWS CLI para --fonte aws")
-    summary.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE,
-                         help=f"arquivo de contas para --fonte contas (padrão: {DEFAULT_ACCOUNTS_FILE})")
+    summary.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_ACCOUNTS_FILE,
+        help=f"arquivo de contas para --fonte contas (padrão: {DEFAULT_ACCOUNTS_FILE})",
+    )
     summary.add_argument("--dias", type=int, default=30, help="tamanho da janela em dias, de 1 a 365 (padrão: 30)")
     summary.add_argument("--top", type=int, default=10, help="quantos serviços listar (padrão: 10)")
     summary.add_argument("--sem-cache", action="store_true", help="ignora o cache e consulta a API de novo")
@@ -59,8 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
 
     recs = commands.add_parser("recomendacoes", help="procura desperdício e estima a economia mensal")
-    recs.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo",
-                      help="'exemplo': inventário fictício com desperdício; 'aws'; 'contas' (padrão: exemplo)")
+    recs.add_argument(
+        "--fonte",
+        choices=SOURCE_KINDS,
+        default="exemplo",
+        help="'exemplo': inventário fictício com desperdício; 'aws'; 'contas' (padrão: exemplo)",
+    )
     recs.add_argument("--perfil", default="finops-lab", help="perfil do AWS CLI para --fonte aws")
     recs.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
     recs.add_argument("--regioes", help="regiões separadas por vírgula (padrão: todas as habilitadas)")
@@ -71,8 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     anomalies.add_argument("--perfil", default="finops-lab")
     anomalies.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
     anomalies.add_argument("--dias", type=int, default=30, help="mostra eventos dos últimos N dias (padrão: 30)")
-    anomalies.add_argument("--sensibilidade", type=float, default=3.5,
-                           help="z robusto mínimo; menor = mais alertas (padrão: 3.5)")
+    anomalies.add_argument(
+        "--sensibilidade", type=float, default=3.5, help="z robusto mínimo; menor = mais alertas (padrão: 3.5)"
+    )
     anomalies.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
 
     weekly = commands.add_parser("relatorio", help="relatório semanal em Markdown (custos, anomalias, economia)")
@@ -104,15 +116,24 @@ def run_summary(args: argparse.Namespace, today: date) -> int:
     source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
     result = run_collection(source, today, args.dias, use_cache=not args.sem_cache, cache_dir=args.cache_dir)
     summary = build_summary(result.records, today=today, days=args.dias, forecast_amount=result.forecast_amount)
-    print(render_text(summary, source=source.label, top=args.top, warnings=result.errors,
-                      forecast_is_partial=result.forecast_is_partial))
+    print(
+        render_text(
+            summary,
+            source=source.label,
+            top=args.top,
+            warnings=result.errors,
+            forecast_is_partial=result.forecast_is_partial,
+        )
+    )
 
     if args.csv:
         export_csv(result.records, args.csv)
         print(f"\nCSV salvo em {args.csv}")
     if source.paid:
-        print(f"\nChamadas pagas à API do Cost Explorer nesta execução: {result.api_calls} "
-              f"(~{fmt_usd(result.api_calls * PRICE_PER_REQUEST_USD)})")
+        print(
+            f"\nChamadas pagas à API do Cost Explorer nesta execução: {result.api_calls} "
+            f"(~{fmt_usd(result.api_calls * PRICE_PER_REQUEST_USD)})"
+        )
     return 1 if result.errors and not result.records else 0
 
 
@@ -122,7 +143,7 @@ def run_recommendations(args: argparse.Namespace) -> int:
     if args.fonte != "exemplo":
         print("Coletando inventário (EC2, EBS, snapshots, IPs) em todas as regiões...", file=sys.stderr)
     inventories = run_inventory(source)
-    recs = analyze(inventories, datetime.now(timezone.utc))
+    recs = analyze(inventories, datetime.now(UTC))
     print(render_recommendations(recs, source=source.label, inventories=inventories))
     if args.csv:
         export_recommendations_csv(recs, args.csv)
@@ -134,7 +155,7 @@ def run_recommendations(args: argparse.Namespace) -> int:
 ANOMALY_HISTORY_DAYS = 90
 
 
-def _recent_anomalies(records, today: date, days: int, threshold: float = 3.5):
+def _recent_anomalies(records: list[CostRecord], today: date, days: int, threshold: float = 3.5) -> list[AnomalyEvent]:
     cutoff = today - timedelta(days=days)
     return [e for e in detect_anomalies(records, threshold=threshold) if e.end >= cutoff]
 
@@ -151,9 +172,11 @@ def run_anomalies(args: argparse.Namespace, today: date) -> int:
     for e in events:
         period = e.start.isoformat() if e.start == e.end else f"{e.start.isoformat()} a {e.end.isoformat()}"
         print(f"  [{e.severity.upper():5}] {period}  {e.account} · {e.service}")
-        print(f"          custo extra: {fmt_usd(e.impact)}  ·  pico {fmt_usd(Decimal(str(round(e.peak.amount, 2))))} "
-              f"vs. esperado {fmt_usd(Decimal(str(round(e.peak.expected, 2))))}  ·  "
-              f"z = {f'{e.peak.zscore:.1f}'.replace('.', ',')}")
+        print(
+            f"          custo extra: {fmt_usd(e.impact)}  ·  pico {fmt_usd(Decimal(str(round(e.peak.amount, 2))))} "
+            f"vs. esperado {fmt_usd(Decimal(str(round(e.peak.expected, 2))))}  ·  "
+            f"z = {f'{e.peak.zscore:.1f}'.replace('.', ',')}"
+        )
     for message in result.errors:
         print(f"\n⚠ {message}")
     return 0
@@ -163,12 +186,14 @@ def run_weekly_report(args: argparse.Namespace, today: date) -> int:
     source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
     result = run_collection(source, today, ANOMALY_HISTORY_DAYS, cache_dir=args.cache_dir)
     regions = [r.strip() for r in args.regioes.split(",") if r.strip()] if args.regioes else None
-    inventory_source = build_inventory_source(args.fonte, profile=args.perfil, config_path=args.config,
-                                              regions=regions)
-    recs = analyze(run_inventory(inventory_source), datetime.now(timezone.utc))
+    inventory_source = build_inventory_source(args.fonte, profile=args.perfil, config_path=args.config, regions=regions)
+    recs = analyze(run_inventory(inventory_source), datetime.now(UTC))
     markdown = build_weekly_report(
-        result.records, today=today, source=source.label,
-        anomalies=_recent_anomalies(result.records, today, 30), recommendations=recs,
+        result.records,
+        today=today,
+        source=source.label,
+        anomalies=_recent_anomalies(result.records, today, 30),
+        recommendations=recs,
         forecast_amount=result.forecast_amount,
     )
     if args.saida:

@@ -60,6 +60,7 @@ def test_memory_cache_ttl_and_refresh():
 
 # ---------- servidor HTTP de verdade, numa porta livre ----------
 
+
 @pytest.fixture(scope="module")
 def base_url():
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(FinOpsApp(today=lambda: TODAY)))
@@ -80,11 +81,13 @@ def get(url: str):
 
 def test_index_and_static_files(base_url):
     status, headers, body = get(f"{base_url}/")
-    assert status == 200 and b"FinOps AWS" in body
+    assert status == 200
+    assert b"FinOps AWS" in body
     assert "default-src 'self'" in headers["Content-Security-Policy"]
     for name, kind in (("styles.css", "text/css"), ("app.js", "text/javascript"), ("charts.js", "text/javascript")):
         status, headers, _ = get(f"{base_url}/static/{name}")
-        assert status == 200 and headers["Content-Type"].startswith(kind)
+        assert status == 200
+        assert headers["Content-Type"].startswith(kind)
 
 
 def test_path_traversal_is_blocked(base_url):
@@ -103,7 +106,8 @@ def test_api_costs_and_recommendations(base_url):
 
     status, _, body = get(f"{base_url}/api/recomendacoes?fonte=exemplo")
     data = json.loads(body)
-    assert status == 200 and data["resumo"]["oportunidades"] > 0
+    assert status == 200
+    assert data["resumo"]["oportunidades"] > 0
 
 
 def test_weekly_report_download(base_url):
@@ -122,8 +126,6 @@ def test_invalid_parameters_return_400(base_url, query):
 
 def test_only_get_is_allowed(base_url):
     request = Request(f"{base_url}/api/custos", data=b"{}", method="POST")
-    try:
+    with pytest.raises(HTTPError) as error:
         urlopen(request, timeout=5)
-        raise AssertionError("POST deveria falhar")
-    except HTTPError as error:
-        assert error.code == 405
+    assert error.value.code == 405

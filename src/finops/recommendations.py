@@ -61,7 +61,8 @@ def _volume_cost(volume: Volume) -> Decimal:
 
 def _long_stopped_instances(inv: Inventory, now: datetime) -> set[str]:
     return {
-        i.id for i in inv.instances
+        i.id
+        for i in inv.instances
         if i.state == "stopped" and _age_days(i.stopped_since or i.launched, now) >= STOPPED_INSTANCE_DAYS
     }
 
@@ -77,12 +78,21 @@ def rule_gp2_to_gp3(inv: Inventory, now: datetime) -> list[Recommendation]:
         savings = _volume_cost(v) - pricing.gp3_equivalent_cost(v.size_gb)
         if savings <= 0:
             continue
-        recs.append(Recommendation(
-            rule="ebs-gp2-para-gp3", title="Migrar volume gp2 para gp3", account=inv.account, region=v.region,
-            resource_id=v.id, severity="media", monthly_savings=savings,
-            detail=f"gp2 de {v.size_gb} GB anexado a {v.instance_id}; gp3 é ~20% mais barato com o mesmo desempenho",
-            action=f"aws ec2 modify-volume --region {v.region} --volume-id {v.id} --volume-type gp3 (sem parada)",
-        ))
+        recs.append(
+            Recommendation(
+                rule="ebs-gp2-para-gp3",
+                title="Migrar volume gp2 para gp3",
+                account=inv.account,
+                region=v.region,
+                resource_id=v.id,
+                severity="media",
+                monthly_savings=savings,
+                detail=(
+                    f"gp2 de {v.size_gb} GB anexado a {v.instance_id}; gp3 é ~20% mais barato com o mesmo desempenho"
+                ),
+                action=f"aws ec2 modify-volume --region {v.region} --volume-id {v.id} --volume-type gp3 (sem parada)",
+            )
+        )
     return recs
 
 
@@ -92,21 +102,32 @@ def rule_unattached_volume(inv: Inventory, now: datetime) -> list[Recommendation
         if v.state != "available":
             continue
         age = _age_days(v.created, now)
-        recs.append(Recommendation(
-            rule="ebs-volume-solto", title="Volume EBS sem uso", account=inv.account, region=v.region,
-            resource_id=v.id, severity="alta" if age >= UNATTACHED_VOLUME_HIGH_DAYS else "media",
-            monthly_savings=_volume_cost(v),
-            detail=f"{v.volume_type} de {v.size_gb} GB sem instância, criado há {age} dias",
-            action="Criar um snapshot (se precisar guardar os dados) e excluir o volume",
-        ))
+        recs.append(
+            Recommendation(
+                rule="ebs-volume-solto",
+                title="Volume EBS sem uso",
+                account=inv.account,
+                region=v.region,
+                resource_id=v.id,
+                severity="alta" if age >= UNATTACHED_VOLUME_HIGH_DAYS else "media",
+                monthly_savings=_volume_cost(v),
+                detail=f"{v.volume_type} de {v.size_gb} GB sem instância, criado há {age} dias",
+                action="Criar um snapshot (se precisar guardar os dados) e excluir o volume",
+            )
+        )
     return recs
 
 
 def rule_idle_elastic_ip(inv: Inventory, now: datetime) -> list[Recommendation]:
     return [
         Recommendation(
-            rule="eip-ocioso", title="IP elástico sem uso", account=inv.account, region=a.region,
-            resource_id=a.allocation_id, severity="alta", monthly_savings=pricing.public_ipv4_monthly_cost(),
+            rule="eip-ocioso",
+            title="IP elástico sem uso",
+            account=inv.account,
+            region=a.region,
+            resource_id=a.allocation_id,
+            severity="alta",
+            monthly_savings=pricing.public_ipv4_monthly_cost(),
             detail=f"IP {a.public_ip} alocado, mas não associado a nenhum recurso",
             action=f"aws ec2 release-address --region {a.region} --allocation-id {a.allocation_id}",
         )
@@ -132,16 +153,24 @@ def rule_old_snapshot(inv: Inventory, now: datetime) -> list[Recommendation]:
         shared = per_volume[s.volume_id] > 1
         factor = SNAPSHOT_SHARED_FACTOR if shared else Decimal("1")
         origin = "volume de origem já excluído" if orphan else f"volume {s.volume_id} ainda existe"
-        basis = (f"estimado em {int(factor * 100)}% do tamanho, pois há outros snapshots do mesmo volume"
-                 if shared else "estimativa máxima")
-        recs.append(Recommendation(
-            rule="snapshot-antigo", title="Snapshot antigo" + (" e órfão" if orphan else ""),
-            account=inv.account, region=s.region, resource_id=s.id,
-            severity="media" if orphan else "baixa",
-            monthly_savings=pricing.SNAPSHOT_GB_MONTH * s.size_gb * factor,
-            detail=f"{s.size_gb} GB, criado há {age} dias, {origin} ({basis})",
-            action="Confirmar que não é backup exigido e excluir, ou mover para o EBS Snapshots Archive",
-        ))
+        basis = (
+            f"estimado em {int(factor * 100)}% do tamanho, pois há outros snapshots do mesmo volume"
+            if shared
+            else "estimativa máxima"
+        )
+        recs.append(
+            Recommendation(
+                rule="snapshot-antigo",
+                title="Snapshot antigo" + (" e órfão" if orphan else ""),
+                account=inv.account,
+                region=s.region,
+                resource_id=s.id,
+                severity="media" if orphan else "baixa",
+                monthly_savings=pricing.SNAPSHOT_GB_MONTH * s.size_gb * factor,
+                detail=f"{s.size_gb} GB, criado há {age} dias, {origin} ({basis})",
+                action="Confirmar que não é backup exigido e excluir, ou mover para o EBS Snapshots Archive",
+            )
+        )
     return recs
 
 
@@ -158,12 +187,19 @@ def rule_stopped_instance(inv: Inventory, now: datetime) -> list[Recommendation]
         attached = [volumes[v] for v in i.volume_ids if v in volumes]
         cost = sum((_volume_cost(v) for v in attached), Decimal("0"))
         size = sum(v.size_gb for v in attached)
-        recs.append(Recommendation(
-            rule="instancia-parada", title="Instância parada há muito tempo", account=inv.account, region=i.region,
-            resource_id=i.id, severity="media", monthly_savings=cost,
-            detail=f"{i.instance_type} parada há {days} dias; continua pagando {size} GB de disco EBS",
-            action="Criar uma AMI ou snapshot e encerrar a instância (terminate)",
-        ))
+        recs.append(
+            Recommendation(
+                rule="instancia-parada",
+                title="Instância parada há muito tempo",
+                account=inv.account,
+                region=i.region,
+                resource_id=i.id,
+                severity="media",
+                monthly_savings=cost,
+                detail=f"{i.instance_type} parada há {days} dias; continua pagando {size} GB de disco EBS",
+                action="Criar uma AMI ou snapshot e encerrar a instância (terminate)",
+            )
+        )
     return recs
 
 
@@ -177,13 +213,19 @@ def rule_idle_instance(inv: Inventory, now: datetime) -> list[Recommendation]:
         if _age_days(i.launched, now) < IDLE_MIN_AGE_DAYS:
             continue
         monthly = pricing.instance_monthly_cost(i.instance_type)
-        recs.append(Recommendation(
-            rule="instancia-ociosa", title="Instância ociosa (superdimensionada)", account=inv.account,
-            region=i.region, resource_id=i.id, severity="alta",
-            monthly_savings=monthly * DOWNSIZE_SAVINGS if monthly is not None else None,
-            detail=f"{i.instance_type} com CPU média de {_pct(i.cpu_avg)} (pico {_pct(i.cpu_max)}) em 14 dias",
-            action="Reduzir para um tamanho menor, agendar para desligar fora do horário ou encerrar",
-        ))
+        recs.append(
+            Recommendation(
+                rule="instancia-ociosa",
+                title="Instância ociosa (superdimensionada)",
+                account=inv.account,
+                region=i.region,
+                resource_id=i.id,
+                severity="alta",
+                monthly_savings=monthly * DOWNSIZE_SAVINGS if monthly is not None else None,
+                detail=f"{i.instance_type} com CPU média de {_pct(i.cpu_avg)} (pico {_pct(i.cpu_max)}) em 14 dias",
+                action="Reduzir para um tamanho menor, agendar para desligar fora do horário ou encerrar",
+            )
+        )
     return recs
 
 
@@ -199,12 +241,19 @@ def rule_missing_tags(inv: Inventory, now: datetime) -> list[Recommendation]:
         missing = [t for t in REQUIRED_TAGS if not tags.get(t)]
         if not missing:
             continue
-        recs.append(Recommendation(
-            rule="sem-tags", title="Recurso sem tags de custo", account=inv.account, region=region,
-            resource_id=resource_id, severity="baixa", monthly_savings=None,
-            detail=f"{kind} sem as tags: {', '.join(missing)}",
-            action="Adicionar as tags para permitir alocar o custo por projeto e ambiente",
-        ))
+        recs.append(
+            Recommendation(
+                rule="sem-tags",
+                title="Recurso sem tags de custo",
+                account=inv.account,
+                region=region,
+                resource_id=resource_id,
+                severity="baixa",
+                monthly_savings=None,
+                detail=f"{kind} sem as tags: {', '.join(missing)}",
+                action="Adicionar as tags para permitir alocar o custo por projeto e ambiente",
+            )
+        )
     return recs
 
 

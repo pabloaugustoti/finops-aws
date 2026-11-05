@@ -12,6 +12,7 @@ Os dados incluem padrões que um analista de FinOps procura:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -57,7 +58,8 @@ class SampleCostExplorerClient:
             value *= weekend_factor
         if self.spike and service == SPIKE_SERVICE and age in SPIKE_AGE_DAYS:
             value *= SPIKE_FACTOR
-        rng = random.Random(f"{self.seed}:{day.isoformat()}:{service}")
+        # Ruído determinístico para dados FICTÍCIOS: não é uso criptográfico.
+        rng = random.Random(f"{self.seed}:{day.isoformat()}:{service}")  # noqa: S311
         value *= rng.uniform(0.92, 1.08)
         return Decimal(str(round(value, 4)))
 
@@ -110,14 +112,14 @@ class SampleCostExplorerClient:
         }
 
 
-def _days(start: date, end: date):
+def _days(start: date, end: date) -> Iterator[date]:
     day = start
     while day < end:
         yield day
         day += timedelta(days=1)
 
 
-def _periods(start: date, end: date, granularity: str):
+def _periods(start: date, end: date, granularity: str) -> Iterator[tuple[date, date]]:
     if granularity == "DAILY":
         for day in _days(start, end):
             yield day, day + timedelta(days=1)

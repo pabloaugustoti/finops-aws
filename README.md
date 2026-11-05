@@ -1,6 +1,10 @@
 # FinOps AWS: monitoramento de custos multi-conta
 
 [![testes](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml/badge.svg)](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml)
+![cobertura](https://img.shields.io/badge/cobertura-92%25-brightgreen)
+![python](https://img.shields.io/badge/python-3.12%20%7C%203.14-blue)
+[![ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
+[![mypy](https://img.shields.io/badge/tipos-mypy-2a6db2)](https://mypy-lang.org/)
 
 Projeto pessoal de estudo para aprender **FinOps na AWS** na prática. A ideia é construir, passo a passo, uma aplicação que:
 
@@ -126,6 +130,24 @@ Custo diário (últimos 14 dias):  ▁▁▅▆█▁▁▁▁▁▁▁▁▁
   Dia mais caro: 2026-10-26 com US$ 65,74
 ```
 
+## Qualidade de código
+
+| Ferramenta | O que garante | Onde roda |
+|---|---|---|
+| **ruff** (lint) | erros comuns, imports, segurança (regras do bandit), boas práticas de pytest | pre-commit e CI |
+| **ruff format** | estilo padronizado em todo o código | pre-commit e CI |
+| **mypy** | tipos consistentes em todo `src/` | pre-commit e CI |
+| **pytest + coverage** | 80 testes, cobertura mínima de **90%** (atual: 92%) | CI, em Python 3.12 e 3.14 |
+| **pre-commit** | as checagens acima + chaves privadas/AWS, arquivos grandes, YAML/TOML | antes de cada commit |
+
+```powershell
+.\.venv\Scripts\Activate.ps1                   # ative o ambiente (o pre-commit usa as ferramentas dele)
+python -m pre_commit install                   # uma vez: liga as checagens no git commit
+python -m ruff check; python -m ruff format    # lint e formatação
+python -m mypy                                 # tipos
+python -m pytest --cov                         # testes com cobertura
+```
+
 ## Adicionar uma conta para monitorar
 
 1. Na conta que será monitorada, implante a role somente leitura, informando o ID da conta hub (de onde o coletor roda):
@@ -156,6 +178,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [06: Motor de recomendações](docs/diario/06-motor-de-recomendacoes.md)
 - [07: Anomalias, relatório semanal e CI](docs/diario/07-anomalias-relatorio-ci.md)
 - [08: Interface web feita à mão](docs/diario/08-interface-web-feita-a-mao.md)
+- [09: Qualidade de código (ruff, mypy, cobertura, pre-commit)](docs/diario/09-qualidade-de-codigo.md)
 
 ## Estrutura
 

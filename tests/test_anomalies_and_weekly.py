@@ -13,8 +13,10 @@ TODAY = date(2026, 11, 5)
 
 def series(values: list[float], service: str = "S", account: str = "a") -> list[CostRecord]:
     start = TODAY - timedelta(days=len(values))
-    return [CostRecord(start + timedelta(days=i), service, Decimal(str(v)), "USD", False, account)
-            for i, v in enumerate(values)]
+    return [
+        CostRecord(start + timedelta(days=i), service, Decimal(str(v)), "USD", False, account)
+        for i, v in enumerate(values)
+    ]
 
 
 def test_flat_series_has_no_anomalies():
@@ -69,18 +71,27 @@ def test_sample_data_finds_exactly_the_planted_spike():
 
 def test_weekly_report_sections():
     result = run_collection(build_source("exemplo", TODAY), TODAY, 90)
-    md = build_weekly_report(result.records, today=TODAY, source="teste",
-                             anomalies=detect_anomalies(result.records), recommendations=[],
-                             forecast_amount=Decimal("100"))
-    for section in ("# Relatório semanal", "## Resumo", "## Maiores serviços da semana", "## Anomalias",
-                    "## Maiores oportunidades de economia"):
+    md = build_weekly_report(
+        result.records,
+        today=TODAY,
+        source="teste",
+        anomalies=detect_anomalies(result.records),
+        recommendations=[],
+        forecast_amount=Decimal("100"),
+    )
+    for section in (
+        "# Relatório semanal",
+        "## Resumo",
+        "## Maiores serviços da semana",
+        "## Anomalias",
+        "## Maiores oportunidades de economia",
+    ):
         assert section in md
     assert "producao" in md
 
 
 def test_weekly_report_empty_account():
-    md = build_weekly_report([], today=TODAY, source="vazia", anomalies=[], recommendations=[],
-                             forecast_amount=None)
+    md = build_weekly_report([], today=TODAY, source="vazia", anomalies=[], recommendations=[], forecast_amount=None)
     assert "Nenhum custo na semana." in md
     assert "Nenhuma anomalia detectada" in md
     assert "indisponível" in md

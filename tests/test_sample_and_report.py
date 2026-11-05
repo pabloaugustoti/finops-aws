@@ -80,7 +80,9 @@ def test_cli_sample_summary(capsys, tmp_path):
     assert "Top serviços" in out
     assert EC2_COMPUTE in out
     assert "Previsão de fechamento .. US$" in out
-    assert "Por conta:" in out and "producao" in out and "desenvolvimento" in out
+    assert "Por conta:" in out
+    assert "producao" in out
+    assert "desenvolvimento" in out
     assert csv_path.read_text(encoding="utf-8").startswith("dia,conta,servico,custo")
 
 

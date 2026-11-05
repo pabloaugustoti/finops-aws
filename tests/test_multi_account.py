@@ -19,6 +19,7 @@ NEXT_MONTH = date(2026, 12, 1)
 
 # ---------- configuração ----------
 
+
 def _write(tmp_path, text: str):
     path = tmp_path / "accounts.toml"
     path.write_text(text, encoding="utf-8")
@@ -26,7 +27,9 @@ def _write(tmp_path, text: str):
 
 
 def test_load_accounts(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 [hub]
 profile = "finops-lab"
 
@@ -39,7 +42,8 @@ name = "prod"
 account_id = "222222222222"
 role_name = "OutraRole"
 external_id = "segredo"
-""")
+""",
+    )
     config = load_accounts(path)
     assert config.hub_profile == "finops-lab"
     assert [a.name for a in config.accounts] == ["lab", "prod"]
@@ -53,8 +57,11 @@ external_id = "segredo"
         ('[[accounts]]\nname="a"\naccount_id="111111111111"', "hub"),
         ('[hub]\nprofile="p"', "nenhuma conta"),
         ('[hub]\nprofile="p"\n[[accounts]]\nname="a"\naccount_id="123"', "12 dígitos"),
-        ('[hub]\nprofile="p"\n[[accounts]]\nname="a"\naccount_id="111111111111"\n'
-         '[[accounts]]\nname="a"\naccount_id="222222222222"', "mais de uma vez"),
+        (
+            '[hub]\nprofile="p"\n[[accounts]]\nname="a"\naccount_id="111111111111"\n'
+            '[[accounts]]\nname="a"\naccount_id="222222222222"',
+            "mais de uma vez",
+        ),
         ("isto não é toml = = =", "TOML inválido"),
     ],
 )
@@ -70,18 +77,27 @@ def test_missing_config_file(tmp_path):
 
 # ---------- AssumeRole ----------
 
+
 def test_assume_role_sends_external_id_and_returns_temporary_session():
     sts = boto3.client("sts", region_name="us-east-1", aws_access_key_id="teste", aws_secret_access_key="teste")
     account = Account(name="prod", account_id="222222222222", external_id="segredo")
     with Stubber(sts) as stubber:
         stubber.add_response(
             "assume_role",
-            {"Credentials": {
-                "AccessKeyId": "ASIATESTE0000000000", "SecretAccessKey": "s" * 40,
-                "SessionToken": "token", "Expiration": "2026-11-04T12:00:00Z",
-            }},
-            {"RoleArn": account.role_arn, "RoleSessionName": "finops-coletor",
-             "DurationSeconds": 3600, "ExternalId": "segredo"},
+            {
+                "Credentials": {
+                    "AccessKeyId": "ASIATESTE0000000000",
+                    "SecretAccessKey": "s" * 40,
+                    "SessionToken": "token",
+                    "Expiration": "2026-11-04T12:00:00Z",
+                }
+            },
+            {
+                "RoleArn": account.role_arn,
+                "RoleSessionName": "finops-coletor",
+                "DurationSeconds": 3600,
+                "ExternalId": "segredo",
+            },
         )
         session = assume_role_session(sts, account)
     credentials = session.get_credentials()
@@ -91,6 +107,7 @@ def test_assume_role_sends_external_id_and_returns_temporary_session():
 
 # ---------- coleta multi-conta ----------
 
+
 def _sample_factory(name: str):
     if name == "quebrada":
         raise PermissionError("role FinOpsReadOnly não encontrada")
@@ -99,8 +116,7 @@ def _sample_factory(name: str):
 
 
 def test_collect_labels_records_by_account():
-    result = collect(["a", "b"], _sample_factory, start=TODAY - timedelta(days=7), end=TODAY,
-                     forecast_end=NEXT_MONTH)
+    result = collect(["a", "b"], _sample_factory, start=TODAY - timedelta(days=7), end=TODAY, forecast_end=NEXT_MONTH)
     assert {r.account for r in result.records} == {"a", "b"}
     total_a = sum(r.amount for r in result.records if r.account == "a")
     total_b = sum(r.amount for r in result.records if r.account == "b")
@@ -110,8 +126,9 @@ def test_collect_labels_records_by_account():
 
 
 def test_one_broken_account_does_not_stop_the_others():
-    result = collect(["a", "quebrada"], _sample_factory, start=TODAY - timedelta(days=7), end=TODAY,
-                     forecast_end=NEXT_MONTH)
+    result = collect(
+        ["a", "quebrada"], _sample_factory, start=TODAY - timedelta(days=7), end=TODAY, forecast_end=NEXT_MONTH
+    )
     assert {r.account for r in result.records} == {"a"}
     assert len(result.errors) == 1
     assert result.errors[0].startswith("quebrada: PermissionError")
@@ -119,8 +136,9 @@ def test_one_broken_account_does_not_stop_the_others():
 
 def test_cache_is_separated_per_account(tmp_path):
     cache = JsonCache(tmp_path)
-    collect(["a", "b"], _sample_factory, start=TODAY - timedelta(days=3), end=TODAY,
-            forecast_end=NEXT_MONTH, cache=cache)
+    collect(
+        ["a", "b"], _sample_factory, start=TODAY - timedelta(days=3), end=TODAY, forecast_end=NEXT_MONTH, cache=cache
+    )
     # 2 contas x (custos + previsão) = 4 respostas distintas no cache
     assert len(list(tmp_path.glob("*.json"))) == 4
 
@@ -136,4 +154,5 @@ def test_summary_and_report_by_account():
 
     text = render_text(summary, source="teste", warnings=["x: AccessDenied"])
     assert "Por conta:" in text
-    assert "Contas com problema" in text and "x: AccessDenied" in text
+    assert "Contas com problema" in text
+    assert "x: AccessDenied" in text

@@ -36,9 +36,7 @@ def _ranked(totals: dict[str, Decimal]) -> list[tuple[str, Decimal]]:
     return sorted(((k, v) for k, v in totals.items() if v > ZERO), key=lambda item: item[1], reverse=True)
 
 
-def build_summary(
-    records: list[CostRecord], *, today: date, days: int, forecast_amount: Decimal | None
-) -> CostSummary:
+def build_summary(records: list[CostRecord], *, today: date, days: int, forecast_amount: Decimal | None) -> CostSummary:
     """`forecast_amount` é a previsão de hoje até o fim do mês (soma de todas as contas)."""
     start = today - timedelta(days=days)
     month_start = today.replace(day=1)
@@ -165,8 +163,10 @@ def render_recommendations(recs: list, *, source: str, inventories: list, detail
 
         lines += ["", "Maiores economias:"]
         for r in savings[:detail_limit]:
-            lines.append(f"  [{SEVERITY_LABEL[r.severity]}] {fmt_usd(r.monthly_savings):>12}/mês  "
-                         f"{r.account} · {r.region} · {r.resource_id}")
+            lines.append(
+                f"  [{SEVERITY_LABEL[r.severity]}] {fmt_usd(r.monthly_savings):>12}/mês  "
+                f"{r.account} · {r.region} · {r.resource_id}"
+            )
             lines.append(f"           {r.title}: {r.detail}")
             lines.append(f"           → {r.action}")
         if len(savings) > detail_limit:
@@ -183,8 +183,11 @@ def render_recommendations(recs: list, *, source: str, inventories: list, detail
 
     for inv in inventories:
         if inv.blocked_regions:
-            lines += ["", f"ℹ {inv.account}: {len(inv.blocked_regions)} região(ões) bloqueadas por SCP da organização "
-                          f"(ignoradas): {', '.join(inv.blocked_regions)}"]
+            lines += [
+                "",
+                f"ℹ {inv.account}: {len(inv.blocked_regions)} região(ões) bloqueadas por SCP da organização "
+                f"(ignoradas): {', '.join(inv.blocked_regions)}",
+            ]
     errors = [f"{i.account}: {e}" for i in inventories for e in i.errors]
     if errors:
         lines += ["", "⚠ Problemas na coleta:"] + [f"  - {e}" for e in errors]
@@ -195,11 +198,14 @@ def export_recommendations_csv(recs: list, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["severidade", "economia_mensal_usd", "regra", "titulo", "conta", "regiao",
-                         "recurso", "detalhe", "acao"])
+        writer.writerow(
+            ["severidade", "economia_mensal_usd", "regra", "titulo", "conta", "regiao", "recurso", "detalhe", "acao"]
+        )
         for r in recs:
-            writer.writerow([r.severity, "" if r.monthly_savings is None else str(r.monthly_savings.quantize(ZERO_CENTS)),
-                             r.rule, r.title, r.account, r.region, r.resource_id, r.detail, r.action])
+            savings = "" if r.monthly_savings is None else str(r.monthly_savings.quantize(ZERO_CENTS))
+            writer.writerow(
+                [r.severity, savings, r.rule, r.title, r.account, r.region, r.resource_id, r.detail, r.action]
+            )
 
 
 ZERO_CENTS = Decimal("0.01")

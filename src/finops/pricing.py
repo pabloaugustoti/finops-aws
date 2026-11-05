@@ -33,12 +33,21 @@ PUBLIC_IPV4_HOUR = D("0.005")  # todo IPv4 público é cobrado desde fev/2024
 
 # EC2 Linux sob demanda: USD por hora (amostra dos tipos mais comuns)
 INSTANCE_HOURLY: dict[str, Decimal] = {
-    "t2.micro": D("0.0116"), "t3.micro": D("0.0104"), "t3.small": D("0.0208"),
-    "t3.medium": D("0.0416"), "t3.large": D("0.0832"), "t3.xlarge": D("0.1664"),
-    "m5.large": D("0.096"), "m5.xlarge": D("0.192"), "m5.2xlarge": D("0.384"),
-    "m6i.large": D("0.096"), "m6i.xlarge": D("0.192"),
-    "c5.large": D("0.085"), "c5.xlarge": D("0.17"),
-    "r5.large": D("0.126"), "r5.xlarge": D("0.252"),
+    "t2.micro": D("0.0116"),
+    "t3.micro": D("0.0104"),
+    "t3.small": D("0.0208"),
+    "t3.medium": D("0.0416"),
+    "t3.large": D("0.0832"),
+    "t3.xlarge": D("0.1664"),
+    "m5.large": D("0.096"),
+    "m5.xlarge": D("0.192"),
+    "m5.2xlarge": D("0.384"),
+    "m6i.large": D("0.096"),
+    "m6i.xlarge": D("0.192"),
+    "c5.large": D("0.085"),
+    "c5.xlarge": D("0.17"),
+    "r5.large": D("0.126"),
+    "r5.xlarge": D("0.252"),
 }
 
 
@@ -47,7 +56,9 @@ def gp2_baseline_iops(size_gb: int) -> int:
     return min(max(3 * size_gb, 100), 16000)
 
 
-def volume_monthly_cost(volume_type: str, size_gb: int, iops: int | None = None, throughput: int | None = None) -> Decimal:
+def volume_monthly_cost(
+    volume_type: str, size_gb: int, iops: int | None = None, throughput: int | None = None
+) -> Decimal:
     price = EBS_GB_MONTH.get(volume_type)
     if price is None:
         return D("0")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,7 @@ def build_source(
     config_path: Path = DEFAULT_ACCOUNTS_FILE,
 ) -> Source:
     if kind == "exemplo":
+
         def sample_factory(name: str) -> SampleCostExplorerClient:
             seed, scale, spike = SAMPLE_ACCOUNTS[name]
             return SampleCostExplorerClient(today=today, seed=seed, scale=scale, spike=spike)
@@ -81,8 +82,12 @@ def run_collection(
     window = collection_window(today, days)
     cache = JsonCache(cache_dir) if source.paid and use_cache else None
     return collect(
-        source.names, source.factory,
-        start=window.start, end=window.end, forecast_end=window.forecast_end, cache=cache,
+        source.names,
+        source.factory,
+        start=window.start,
+        end=window.end,
+        forecast_end=window.forecast_end,
+        cache=cache,
     )
 
 
@@ -102,7 +107,7 @@ def build_inventory_source(
     now: datetime | None = None,
 ) -> InventorySource:
     if kind == "exemplo":
-        moment = now or datetime.now(timezone.utc)
+        moment = now or datetime.now(UTC)
         return InventorySource(list(SAMPLE_ACCOUNTS), lambda name: sample_inventory(name, moment), "dados de exemplo")
 
     names, sessions, label = _aws_sessions(kind, profile, config_path)
