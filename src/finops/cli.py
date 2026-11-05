@@ -7,13 +7,16 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from finops.accounts import ConfigError, load_accounts
+from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
-from finops.cost_explorer import CostExplorer
+from finops.collector import ClientFactory, collect
 from finops.report import build_summary, export_csv, fmt_usd, render_text
-from finops.sample_client import SampleCostExplorerClient
+from finops.cost_explorer import PRICE_PER_REQUEST_USD
+from finops.sample_client import SAMPLE_ACCOUNTS, SampleCostExplorerClient
 
 DEFAULT_CACHE_DIR = Path("data/cache")
-BILLING_REGION = "us-east-1"  # Cost Explorer e Budgets respondem nesta região
+DEFAULT_ACCOUNTS_FILE = Path("accounts.local.toml")
 
 
 def utc_today() -> date:
@@ -25,25 +28,53 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="finops", description="Ferramentas de FinOps para AWS.")
     commands = parser.add_subparsers(dest="command", required=True, metavar="comando")
 
-    summary = commands.add_parser("resumo", help="resumo de custos por serviço")
-    summary.add_argument("--fonte", choices=["exemplo", "aws"], default="exemplo",
-                         help="'exemplo' usa dados fictícios; 'aws' consulta sua conta (padrão: exemplo)")
-    summary.add_argument("--perfil", default="finops-lab", help="perfil do AWS CLI (padrão: finops-lab)")
+    summary = commands.add_parser("resumo", help="resumo de custos por conta e serviço")
+    summary.add_argument(
+        "--fonte", choices=["exemplo", "aws", "contas"], default="exemplo",
+        help="'exemplo': dados fictícios de 3 contas; 'aws': só a conta do --perfil; "
+             "'contas': todas as contas do --config via AssumeRole (padrão: exemplo)",
+    )
+    summary.add_argument("--perfil", default="finops-lab", help="perfil do AWS CLI para --fonte aws")
+    summary.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE,
+                         help=f"arquivo de contas para --fonte contas (padrão: {DEFAULT_ACCOUNTS_FILE})")
     summary.add_argument("--dias", type=int, default=30, help="tamanho da janela em dias, de 1 a 365 (padrão: 30)")
     summary.add_argument("--top", type=int, default=10, help="quantos serviços listar (padrão: 10)")
     summary.add_argument("--sem-cache", action="store_true", help="ignora o cache e consulta a API de novo")
-    summary.add_argument("--csv", type=Path, help="exporta os custos diários por serviço para este arquivo CSV")
+    summary.add_argument("--csv", type=Path, help="exporta os custos diários por conta e serviço para CSV")
     summary.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
+    check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
+    check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
 
     clear = commands.add_parser("limpar-cache", help="apaga as respostas da AWS guardadas em cache")
     clear.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
     return parser
 
 
-def make_aws_client(profile: str):
-    import boto3
+def _sources(args: argparse.Namespace, today: date) -> tuple[list[str], ClientFactory, str, bool]:
+    """Devolve (contas, fábrica de clientes, descrição da fonte, usa API paga)."""
+    if args.fonte == "exemplo":
+        def sample_factory(name: str) -> SampleCostExplorerClient:
+            seed, scale, spike = SAMPLE_ACCOUNTS[name]
+            return SampleCostExplorerClient(today=today, seed=seed, scale=scale, spike=spike)
 
-    return boto3.Session(profile_name=profile).client("ce", region_name=BILLING_REGION)
+        return list(SAMPLE_ACCOUNTS), sample_factory, "dados de exemplo", False
+
+    if args.fonte == "aws":
+        def profile_factory(_: str):
+            return profile_session(args.perfil).client("ce", region_name=BILLING_REGION)
+
+        return [args.perfil], profile_factory, f"AWS, perfil {args.perfil}", True
+
+    config = load_accounts(args.config)
+    by_name = {a.name: a for a in config.accounts}
+    sts = profile_session(config.hub_profile).client("sts")
+
+    def assume_factory(name: str):
+        return assume_role_session(sts, by_name[name]).client("ce", region_name=BILLING_REGION)
+
+    label = f"AWS, {len(by_name)} conta(s) via AssumeRole a partir do perfil {config.hub_profile}"
+    return list(by_name), assume_factory, label, True
 
 
 def run_summary(args: argparse.Namespace, today: date) -> int:
@@ -51,31 +82,49 @@ def run_summary(args: argparse.Namespace, today: date) -> int:
         print("erro: --dias precisa estar entre 1 e 365", file=sys.stderr)
         return 2
 
-    if args.fonte == "exemplo":
-        explorer = CostExplorer(SampleCostExplorerClient(today=today))
-        source = "dados de exemplo"
-    else:
-        cache = None if args.sem_cache else JsonCache(args.cache_dir)
-        explorer = CostExplorer(make_aws_client(args.perfil), cache=cache)
-        source = f"AWS, perfil {args.perfil}"
+    names, factory, source, paid = _sources(args, today)
+    cache = JsonCache(args.cache_dir) if paid and not args.sem_cache else None
 
     month_start = today.replace(day=1)
     start = min(today - timedelta(days=args.dias), month_start)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
 
-    records = explorer.costs_by_service(start, today) if start < today else []
-    forecast = explorer.forecast(today, next_month)
-
-    summary = build_summary(records, today=today, days=args.dias, forecast=forecast)
-    print(render_text(summary, source=source, top=args.top))
+    result = collect(names, factory, start=start, end=today, forecast_end=next_month, cache=cache)
+    summary = build_summary(result.records, today=today, days=args.dias, forecast_amount=result.forecast_amount)
+    print(render_text(summary, source=source, top=args.top, warnings=result.errors,
+                      forecast_is_partial=result.forecast_is_partial))
 
     if args.csv:
-        export_csv(records, args.csv)
+        export_csv(result.records, args.csv)
         print(f"\nCSV salvo em {args.csv}")
-    if args.fonte == "aws":
-        print(f"\nChamadas pagas à API do Cost Explorer nesta execução: {explorer.api_calls} "
-              f"(~{fmt_usd(explorer.estimated_api_cost)})")
-    return 0
+    if paid:
+        print(f"\nChamadas pagas à API do Cost Explorer nesta execução: {result.api_calls} "
+              f"(~{fmt_usd(result.api_calls * PRICE_PER_REQUEST_USD)})")
+    return 1 if result.errors and not result.records else 0
+
+
+def run_check(args: argparse.Namespace) -> int:
+    config = load_accounts(args.config)
+    sts = profile_session(config.hub_profile).client("sts")
+    hub = sts.get_caller_identity()
+    print(f"Conta hub: {hub['Account']} (perfil {config.hub_profile})\n")
+
+    failures = 0
+    for account in config.accounts:
+        try:
+            session = assume_role_session(sts, account)
+            identity = session.client("sts").get_caller_identity()
+            budgets = session.client("budgets", region_name=BILLING_REGION).describe_budgets(
+                AccountId=account.account_id
+            )
+            print(f"  OK    {account.name} ({account.account_id})")
+            print(f"        identidade: {identity['Arn']}")
+            print(f"        leitura de budgets: {len(budgets.get('Budgets', []))} encontrado(s)")
+        except Exception as error:  # noqa: BLE001
+            failures += 1
+            print(f"  FALHA {account.name} ({account.account_id}): {str(error).splitlines()[0]}")
+    print(f"\n{len(config.accounts) - failures} de {len(config.accounts)} conta(s) acessível(is).")
+    return 1 if failures else 0
 
 
 def main(argv: list[str] | None = None, today: date | None = None) -> int:
@@ -92,8 +141,14 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
     from botocore.exceptions import BotoCoreError, ClientError
 
     try:
+        if args.command == "verificar-contas":
+            return run_check(args)
         return run_summary(args, today or utc_today())
+    except ConfigError as error:
+        print(f"erro de configuração: {error}", file=sys.stderr)
+        print("dica: copie accounts.example.toml para accounts.local.toml e preencha", file=sys.stderr)
+        return 2
     except (BotoCoreError, ClientError) as error:
         print(f"erro ao acessar a AWS: {error}", file=sys.stderr)
-        print(f"dica: renove o login com  aws login --profile {args.perfil}", file=sys.stderr)
+        print("dica: renove o login com  aws login --profile <perfil>", file=sys.stderr)
         return 1

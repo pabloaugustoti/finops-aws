@@ -7,7 +7,7 @@
 .aws/
 credentials
 config.local.*
-accounts.local.yaml
+accounts.local.toml
 .streamlit/secrets.toml
 
 # ===== Dados de custo reais (podem conter IDs de conta) =====

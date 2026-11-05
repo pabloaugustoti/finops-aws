@@ -1,0 +1,19 @@
+# Copie para accounts.local.toml (ignorado pelo Git) e preencha com suas contas.
+#
+# Em cada conta monitorada, implante antes a role somente leitura:
+#   infra/cloudformation/finops-readonly-role.yaml
+
+# Perfil do AWS CLI da conta "hub", de onde o coletor roda e assume as roles.
+[hub]
+profile = "finops-lab"
+
+[[accounts]]
+name = "lab"
+account_id = "111111111111"
+role_name = "FinOpsReadOnly"
+
+# [[accounts]]
+# name = "producao"
+# account_id = "222222222222"
+# role_name = "FinOpsReadOnly"
+# external_id = "segredo-compartilhado"   # se a role exigir

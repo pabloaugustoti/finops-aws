@@ -106,10 +106,10 @@ def test_closed_period_is_cached_forever_but_estimated_is_not(ce_client, tmp_pat
         {"ResultsByTime": [_result("2026-10-01", "2026-10-02", {"A": "1"}, estimated=True)]},
         USAGE_PARAMS,
     )
-    cache = JsonCache(tmp_path)
-    CostExplorer(client, cache=cache).costs_by_service(START, END)
+    explorer = CostExplorer(client, cache=JsonCache(tmp_path))
+    explorer.costs_by_service(START, END)
 
-    key = JsonCache.make_key("get_cost_and_usage", USAGE_PARAMS)
+    key = explorer.cache_key("get_cost_and_usage", USAGE_PARAMS)
     assert '"permanent": false' in (tmp_path / f"{key}.json").read_text(encoding="utf-8")
 
 

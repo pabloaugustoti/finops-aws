@@ -14,6 +14,7 @@ class CostRecord:
     amount: Decimal
     unit: str
     estimated: bool
+    account: str = ""
 
 
 @dataclass(frozen=True)
