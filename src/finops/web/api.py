@@ -88,24 +88,35 @@ def costs_payload(
     projection = []
     if forecast_rest is not None:
         anchor = month_days[-1] if month_days else month_start - timedelta(days=1)
-        projection = [{"dia": anchor.isoformat(), "valor": round(mtd, 2)},
-                      {"dia": month_end.isoformat(), "valor": round(mtd + forecast_rest, 2)}]
+        projection = [
+            {"dia": anchor.isoformat(), "valor": round(mtd, 2)},
+            {"dia": month_end.isoformat(), "valor": round(mtd + forecast_rest, 2)},
+        ]
 
     cutoff = today - timedelta(days=days)
     events = [e for e in detect_anomalies(records) if e.end >= cutoff]
 
     return {
         "meta": {
-            "fonte": label, "paga": paid, "chamadas_api": result.api_calls,
+            "fonte": label,
+            "paga": paid,
+            "chamadas_api": result.api_calls,
             "custo_api": _money(result.api_calls * Decimal("0.01")),
-            "contas": ok_accounts, "selecionadas": chosen, "erros": result.errors,
-            "inicio": start.isoformat(), "fim": (today - timedelta(days=1)).isoformat(), "dias": days,
+            "contas": ok_accounts,
+            "selecionadas": chosen,
+            "erros": result.errors,
+            "inicio": start.isoformat(),
+            "fim": (today - timedelta(days=1)).isoformat(),
+            "dias": days,
             "estimado": any(r.estimated for r in window),
         },
         "kpis": {
-            "total": round(total, 2), "media_diaria": round(total / days, 2), "mes_ate_ontem": round(mtd, 2),
+            "total": round(total, 2),
+            "media_diaria": round(total / days, 2),
+            "mes_ate_ontem": round(mtd, 2),
             "previsao_mes": round(mtd + forecast_rest, 2) if forecast_rest is not None else None,
-            "ultimos_7": round(last7, 2), "anteriores_7": round(prev7, 2),
+            "ultimos_7": round(last7, 2),
+            "anteriores_7": round(prev7, 2),
             "variacao_semana": (last7 / prev7 - 1) if prev7 > 0 else None,
         },
         "diario": {
@@ -117,25 +128,34 @@ def costs_payload(
         "mes": {"inicio": month_start.isoformat(), "fim": month_end.isoformat(), "real": real, "previsao": projection},
         "anomalias": [
             {
-                "inicio": e.start.isoformat(), "fim": e.end.isoformat(), "conta": e.account, "servico": e.service,
-                "custo_extra": float(e.impact), "pico": round(e.peak.amount, 2), "esperado": round(e.peak.expected, 2),
-                "z": round(e.peak.zscore, 1), "severidade": e.severity,
+                "inicio": e.start.isoformat(),
+                "fim": e.end.isoformat(),
+                "conta": e.account,
+                "servico": e.service,
+                "custo_extra": float(e.impact),
+                "pico": round(e.peak.amount, 2),
+                "esperado": round(e.peak.expected, 2),
+                "z": round(e.peak.zscore, 1),
+                "severidade": e.severity,
                 "dias": [d.day.isoformat() for d in e.days],
             }
             for e in events
         ],
         "linhas": [
-            {"dia": r.day.isoformat(), "conta": r.account, "servico": r.service,
-             "custo": round(float(r.amount), 4), "estimado": r.estimated}
+            {
+                "dia": r.day.isoformat(),
+                "conta": r.account,
+                "servico": r.service,
+                "custo": round(float(r.amount), 4),
+                "estimado": r.estimated,
+            }
             for r in sorted(window, key=lambda r: (r.day, r.account, -r.amount), reverse=True)
             if r.amount > 0
         ],
     }
 
 
-def recommendations_payload(
-    recs: list[Recommendation], inventories: list[Inventory], *, label: str
-) -> dict[str, Any]:
+def recommendations_payload(recs: list[Recommendation], inventories: list[Inventory], *, label: str) -> dict[str, Any]:
     savings = [r for r in recs if r.monthly_savings is not None]
     total = total_savings(recs)
     return {
@@ -147,8 +167,10 @@ def recommendations_payload(
             "erros": [f"{i.account}: {e}" for i in inventories for e in i.errors],
         },
         "resumo": {
-            "economia_mes": _money(total), "economia_ano": _money(total * 12),
-            "oportunidades": len(savings), "sem_tags": len(recs) - len(savings),
+            "economia_mes": _money(total),
+            "economia_ano": _money(total * 12),
+            "oportunidades": len(savings),
+            "sem_tags": len(recs) - len(savings),
         },
         "por_tipo": [
             {"nome": t, "quantidade": c, "valor": _money(a), "participacao": float(a / total) if total else 0.0}
@@ -156,8 +178,14 @@ def recommendations_payload(
         ],
         "itens": [
             {
-                "regra": r.rule, "titulo": r.title, "conta": r.account, "regiao": r.region,
-                "recurso": r.resource_id, "detalhe": r.detail, "acao": r.action, "severidade": r.severity,
+                "regra": r.rule,
+                "titulo": r.title,
+                "conta": r.account,
+                "regiao": r.region,
+                "recurso": r.resource_id,
+                "detalhe": r.detail,
+                "acao": r.action,
+                "severidade": r.severity,
                 "categoria": r.category,
                 "economia_mes": _money(r.monthly_savings) if r.monthly_savings is not None else None,
             }

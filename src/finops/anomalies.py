@@ -91,7 +91,7 @@ def detect_anomalies(
 
         flagged: list[AnomalousDay] = []
         for i in range(lookback, len(values)):
-            window = values[i - lookback:i]
+            window = values[i - lookback : i]
             center = median(window)
             spread = median(abs(v - center) for v in window) * MAD_TO_SIGMA
             # piso no desvio: séries quase constantes não podem gerar alarmes por ruído mínimo

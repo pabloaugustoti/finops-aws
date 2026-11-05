@@ -1,0 +1,8 @@
+# Finais de linha consistentes (LF) no repositório e em qualquer sistema operacional.
+* text=auto eol=lf
+
+# Binários: nunca converter
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

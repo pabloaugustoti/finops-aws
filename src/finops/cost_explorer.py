@@ -68,7 +68,7 @@ class CostExplorer:
         key = self.cache_key(operation, params)
         if self._cache is not None:
             cached = self._cache.get(key)
-            if cached is not None:
+            if isinstance(cached, dict):
                 return cached
         try:
             response = self._fetch(operation, params)

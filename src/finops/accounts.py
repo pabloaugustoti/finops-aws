@@ -46,7 +46,7 @@ def load_accounts(path: Path) -> AccountsConfig:
 
     hub_profile = data.get("hub", {}).get("profile")
     if not hub_profile:
-        raise ConfigError("defina [hub] profile = \"...\" com o perfil do AWS CLI da conta hub")
+        raise ConfigError('defina [hub] profile = "..." com o perfil do AWS CLI da conta hub')
 
     raw_accounts = data.get("accounts", [])
     if not raw_accounts:

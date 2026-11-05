@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from finops.accounts import Account
+
+if TYPE_CHECKING:
+    import boto3
 
 BILLING_REGION = "us-east-1"  # Cost Explorer e Budgets respondem nesta região
 SESSION_NAME = "finops-coletor"
 
 
-def profile_session(profile: str):
+def profile_session(profile: str) -> boto3.Session:
     """Sessão do perfil do AWS CLI.
 
     Se o perfil não tiver região padrão, usamos us-east-1: a renovação automática das
@@ -25,7 +28,7 @@ def profile_session(profile: str):
     return session
 
 
-def assume_role_session(sts_client: Any, account: Account, duration_seconds: int = 3600):
+def assume_role_session(sts_client: Any, account: Account, duration_seconds: int = 3600) -> boto3.Session:
     """Assume a role somente leitura da conta e devolve uma sessão boto3 com credenciais temporárias.
 
     As credenciais ficam só em memória e expiram sozinhas (no máximo 1 h).

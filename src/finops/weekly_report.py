@@ -95,11 +95,11 @@ def build_weekly_report(
         lines.append("Nenhuma anomalia detectada. ✅")
     lines.append("")
 
-    savings = [r for r in recommendations if r.monthly_savings is not None][:top]
+    savings = [(r, r.monthly_savings) for r in recommendations if r.monthly_savings is not None][:top]
     lines += ["## Maiores oportunidades de economia", ""]
     if savings:
         lines += ["| Economia/mês | Conta | Recurso | Recomendação |", "|---:|---|---|---|"]
-        lines += [f"| {fmt_usd(r.monthly_savings)} | {r.account} | `{r.resource_id}` | {r.title} |" for r in savings]
+        lines += [f"| {fmt_usd(amount)} | {r.account} | `{r.resource_id}` | {r.title} |" for r, amount in savings]
     else:
         lines.append("Nenhuma oportunidade encontrada no inventário. ✅")
     governance = sum(1 for r in recommendations if r.monthly_savings is None)

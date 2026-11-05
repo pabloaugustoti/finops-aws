@@ -30,5 +30,5 @@ def test_sample_source_end_to_end():
 
 
 def test_unknown_source():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="fonte desconhecida"):
         build_source("nada", TODAY)

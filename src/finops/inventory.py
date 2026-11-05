@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 REQUIRED_TAGS = ("Project", "Environment")
@@ -26,7 +26,7 @@ def parse_stop_time(reason: str | None) -> datetime | None:
     match = _STOP_TIME.search(reason or "")
     if not match:
         return None
-    return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -114,13 +114,16 @@ def _cpu_stats(cloudwatch: Any, instance_ids: list[str], now: datetime) -> dict[
     """Média e máximo das médias horárias de CPU de cada instância (até 500 por chamada)."""
     stats: dict[str, tuple[float, float]] = {}
     for start in range(0, len(instance_ids), 500):
-        batch = instance_ids[start:start + 500]
+        batch = instance_ids[start : start + 500]
         queries = [
             {
                 "Id": f"cpu{index}",
                 "MetricStat": {
-                    "Metric": {"Namespace": "AWS/EC2", "MetricName": "CPUUtilization",
-                               "Dimensions": [{"Name": "InstanceId", "Value": instance_id}]},
+                    "Metric": {
+                        "Namespace": "AWS/EC2",
+                        "MetricName": "CPUUtilization",
+                        "Dimensions": [{"Name": "InstanceId", "Value": instance_id}],
+                    },
                     "Period": 3600,
                     "Stat": "Average",
                 },
@@ -129,7 +132,9 @@ def _cpu_stats(cloudwatch: Any, instance_ids: list[str], now: datetime) -> dict[
             for index, instance_id in enumerate(batch)
         ]
         response = cloudwatch.get_metric_data(
-            MetricDataQueries=queries, StartTime=now - timedelta(days=CPU_LOOKBACK_DAYS), EndTime=now,
+            MetricDataQueries=queries,
+            StartTime=now - timedelta(days=CPU_LOOKBACK_DAYS),
+            EndTime=now,
         )
         for result in response.get("MetricDataResults", []):
             values = result.get("Values", [])
@@ -144,24 +149,45 @@ def collect_region(ec2: Any, cloudwatch: Any, region: str, account: str, now: da
 
     for raw in _paginate(ec2, "describe_volumes", "Volumes"):
         attachments = raw.get("Attachments") or []
-        inventory.volumes.append(Volume(
-            id=raw["VolumeId"], region=region, size_gb=raw["Size"], volume_type=raw["VolumeType"],
-            state=raw["State"], created=raw["CreateTime"],
-            instance_id=attachments[0]["InstanceId"] if attachments else None,
-            iops=raw.get("Iops"), throughput=raw.get("Throughput"), tags=_tags(raw.get("Tags")),
-        ))
+        inventory.volumes.append(
+            Volume(
+                id=raw["VolumeId"],
+                region=region,
+                size_gb=raw["Size"],
+                volume_type=raw["VolumeType"],
+                state=raw["State"],
+                created=raw["CreateTime"],
+                instance_id=attachments[0]["InstanceId"] if attachments else None,
+                iops=raw.get("Iops"),
+                throughput=raw.get("Throughput"),
+                tags=_tags(raw.get("Tags")),
+            )
+        )
 
     for raw in ec2.describe_addresses().get("Addresses", []):
-        inventory.addresses.append(Address(
-            allocation_id=raw.get("AllocationId", raw["PublicIp"]), public_ip=raw["PublicIp"], region=region,
-            association_id=raw.get("AssociationId"), instance_id=raw.get("InstanceId"), tags=_tags(raw.get("Tags")),
-        ))
+        inventory.addresses.append(
+            Address(
+                allocation_id=raw.get("AllocationId", raw["PublicIp"]),
+                public_ip=raw["PublicIp"],
+                region=region,
+                association_id=raw.get("AssociationId"),
+                instance_id=raw.get("InstanceId"),
+                tags=_tags(raw.get("Tags")),
+            )
+        )
 
     for raw in _paginate(ec2, "describe_snapshots", "Snapshots", OwnerIds=["self"]):
-        inventory.snapshots.append(Snapshot(
-            id=raw["SnapshotId"], region=region, size_gb=raw["VolumeSize"], created=raw["StartTime"],
-            volume_id=raw.get("VolumeId"), description=raw.get("Description", ""), tags=_tags(raw.get("Tags")),
-        ))
+        inventory.snapshots.append(
+            Snapshot(
+                id=raw["SnapshotId"],
+                region=region,
+                size_gb=raw["VolumeSize"],
+                created=raw["StartTime"],
+                volume_id=raw.get("VolumeId"),
+                description=raw.get("Description", ""),
+                tags=_tags(raw.get("Tags")),
+            )
+        )
 
     raw_instances = [i for r in _paginate(ec2, "describe_instances", "Reservations") for i in r.get("Instances", [])]
     running = [i["InstanceId"] for i in raw_instances if i["State"]["Name"] == "running"]
@@ -171,14 +197,20 @@ def collect_region(ec2: Any, cloudwatch: Any, region: str, account: str, now: da
         if state in ("terminated", "shutting-down"):
             continue
         avg_max = cpu.get(raw["InstanceId"])
-        inventory.instances.append(Instance(
-            id=raw["InstanceId"], region=region, instance_type=raw["InstanceType"], state=state,
-            launched=raw["LaunchTime"],
-            stopped_since=parse_stop_time(raw.get("StateTransitionReason")) if state == "stopped" else None,
-            volume_ids=tuple(m["Ebs"]["VolumeId"] for m in raw.get("BlockDeviceMappings", []) if "Ebs" in m),
-            cpu_avg=avg_max[0] if avg_max else None, cpu_max=avg_max[1] if avg_max else None,
-            tags=_tags(raw.get("Tags")),
-        ))
+        inventory.instances.append(
+            Instance(
+                id=raw["InstanceId"],
+                region=region,
+                instance_type=raw["InstanceType"],
+                state=state,
+                launched=raw["LaunchTime"],
+                stopped_since=parse_stop_time(raw.get("StateTransitionReason")) if state == "stopped" else None,
+                volume_ids=tuple(m["Ebs"]["VolumeId"] for m in raw.get("BlockDeviceMappings", []) if "Ebs" in m),
+                cpu_avg=avg_max[0] if avg_max else None,
+                cpu_max=avg_max[1] if avg_max else None,
+                tags=_tags(raw.get("Tags")),
+            )
+        )
     return inventory
 
 
@@ -188,10 +220,13 @@ def enabled_regions(session: Any) -> list[str]:
 
 
 def collect_inventory(
-    session: Any, account: str, regions: list[str] | None = None, max_workers: int = 8,
+    session: Any,
+    account: str,
+    regions: list[str] | None = None,
+    max_workers: int = 8,
 ) -> Inventory:
     """Inventário de todas as regiões (ou só das informadas), em paralelo."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     regions = regions or enabled_regions(session)
     # Sessões boto3 não são thread-safe; os clientes são. Criamos os clientes antes de paralelizar.
     clients = {r: (session.client("ec2", region_name=r), session.client("cloudwatch", region_name=r)) for r in regions}

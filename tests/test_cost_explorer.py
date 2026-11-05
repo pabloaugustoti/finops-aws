@@ -37,9 +37,7 @@ def _result(day: str, next_day: str, groups: dict[str, str], estimated: bool = F
 @pytest.fixture
 def ce_client():
     # Credenciais falsas: o Stubber intercepta as chamadas antes de qualquer acesso à rede.
-    client = boto3.client(
-        "ce", region_name="us-east-1", aws_access_key_id="teste", aws_secret_access_key="teste"
-    )
+    client = boto3.client("ce", region_name="us-east-1", aws_access_key_id="teste", aws_secret_access_key="teste")
     with Stubber(client) as stubber:
         yield client, stubber
         stubber.assert_no_pending_responses()
@@ -49,10 +47,12 @@ def test_parses_groups_into_records(ce_client):
     client, stubber = ce_client
     stubber.add_response(
         "get_cost_and_usage",
-        {"ResultsByTime": [
-            _result("2026-10-01", "2026-10-02", {"Amazon S3": "1.50", "AWS Lambda": "0.25"}),
-            _result("2026-10-02", "2026-10-03", {"Amazon S3": "2.00"}),
-        ]},
+        {
+            "ResultsByTime": [
+                _result("2026-10-01", "2026-10-02", {"Amazon S3": "1.50", "AWS Lambda": "0.25"}),
+                _result("2026-10-02", "2026-10-03", {"Amazon S3": "2.00"}),
+            ]
+        },
         USAGE_PARAMS,
     )
     records = CostExplorer(client).costs_by_service(START, END)
@@ -115,9 +115,7 @@ def test_closed_period_is_cached_forever_but_estimated_is_not(ce_client, tmp_pat
 
 def test_forecast(ce_client):
     client, stubber = ce_client
-    stubber.add_response(
-        "get_cost_forecast", {"Total": {"Amount": "12.3456", "Unit": "USD"}}, FORECAST_PARAMS
-    )
+    stubber.add_response("get_cost_forecast", {"Total": {"Amount": "12.3456", "Unit": "USD"}}, FORECAST_PARAMS)
     forecast = CostExplorer(client).forecast(date(2026, 11, 4), date(2026, 12, 1))
     assert forecast is not None
     assert forecast.amount == Decimal("12.3456")
@@ -137,13 +135,14 @@ def test_forecast_unavailable_on_new_account(ce_client):
 
 def test_other_errors_are_raised(ce_client):
     client, stubber = ce_client
-    stubber.add_client_error("get_cost_forecast", service_error_code="AccessDeniedException",
-                             expected_params=FORECAST_PARAMS)
+    stubber.add_client_error(
+        "get_cost_forecast", service_error_code="AccessDeniedException", expected_params=FORECAST_PARAMS
+    )
     with pytest.raises(Exception, match="AccessDenied"):
         CostExplorer(client).forecast(date(2026, 11, 4), date(2026, 12, 1))
 
 
 def test_rejects_empty_period(ce_client):
     client, _ = ce_client
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="precisa ser anterior"):
         CostExplorer(client).costs_by_service(END, END)

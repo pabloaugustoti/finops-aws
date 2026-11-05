@@ -16,19 +16,24 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import date, datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from finops.accounts import ConfigError
 from finops.anomalies import detect_anomalies
-from finops.recommendations import analyze
+from finops.collector import CollectionResult
+from finops.inventory import Inventory
+from finops.recommendations import Recommendation, analyze
 from finops.sources import (
     DEFAULT_ACCOUNTS_FILE,
     SOURCE_KINDS,
+    InventorySource,
+    Source,
     build_inventory_source,
     build_source,
     run_collection,
@@ -42,8 +47,11 @@ FETCH_DAYS = 90  # busca 90 dias de uma vez; trocar o período na tela não gera
 CACHE_TTL_SECONDS = 3600
 PERIODS = {7, 14, 30, 60, 90}
 CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
 }
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -53,8 +61,8 @@ SECURITY_HEADERS = {
 }
 
 
-class BadRequest(ValueError):
-    pass
+class BadRequestError(ValueError):
+    """Parâmetro inválido vindo da URL (vira resposta HTTP 400)."""
 
 
 class MemoryCache:
@@ -84,46 +92,50 @@ class FinOpsApp:
     def __init__(self, config_path: Path = DEFAULT_ACCOUNTS_FILE, today: Callable[[], date] | None = None) -> None:
         self.config_path = config_path
         self.cache = MemoryCache()
-        self._today = today or (lambda: datetime.now(timezone.utc).date())
+        self._today = today or (lambda: datetime.now(UTC).date())
 
     def _source_params(self, query: dict[str, list[str]]) -> tuple[str, str]:
         kind = _one(query, "fonte", "exemplo")
         if kind not in SOURCE_KINDS:
-            raise BadRequest(f"fonte inválida: {kind}")
+            raise BadRequestError(f"fonte inválida: {kind}")
         profile = _one(query, "perfil", "finops-lab")
         if not profile.replace("-", "").replace("_", "").isalnum():
-            raise BadRequest("perfil inválido")
+            raise BadRequestError("perfil inválido")
         return kind, profile
 
-    def _collection(self, kind: str, profile: str, refresh: bool):
+    def _collection(self, kind: str, profile: str, refresh: bool) -> tuple[date, Source, CollectionResult]:
         today = self._today()
 
-        def load():
+        def load() -> tuple[Source, CollectionResult]:
             source = build_source(kind, today, profile=profile, config_path=self.config_path)
             return source, run_collection(source, today, FETCH_DAYS)
 
-        return today, *self.cache.get_or_load(("custos", kind, profile, today), load, refresh)
+        source, result = self.cache.get_or_load(("custos", kind, profile, today), load, refresh)
+        return today, source, result
 
     def costs(self, query: dict[str, list[str]]) -> dict[str, Any]:
         kind, profile = self._source_params(query)
         try:
             days = int(_one(query, "dias", "30"))
         except ValueError:
-            raise BadRequest("dias precisa ser um número") from None
+            raise BadRequestError("dias precisa ser um número") from None
         if days not in PERIODS:
-            raise BadRequest(f"dias precisa ser um de {sorted(PERIODS)}")
+            raise BadRequestError(f"dias precisa ser um de {sorted(PERIODS)}")
         selected = [c for c in _one(query, "contas", "").split(",") if c] or None
         today, source, result = self._collection(kind, profile, "recarregar" in query)
         return costs_payload(result, today=today, days=days, label=source.label, paid=source.paid, selected=selected)
 
-    def _inventory(self, kind: str, profile: str, regions: list[str] | None, refresh: bool):
-        def load():
+    def _inventory(
+        self, kind: str, profile: str, regions: list[str] | None, refresh: bool
+    ) -> tuple[InventorySource, list[Inventory], list[Recommendation]]:
+        def load() -> tuple[InventorySource, list[Inventory], list[Recommendation]]:
             source = build_inventory_source(kind, profile=profile, config_path=self.config_path, regions=regions)
             inventories = run_inventory(source)
-            return source, inventories, analyze(inventories, datetime.now(timezone.utc))
+            return source, inventories, analyze(inventories, datetime.now(UTC))
 
         key = ("inventario", kind, profile, tuple(regions or ()))
-        return self.cache.get_or_load(key, load, refresh)
+        source, inventories, recs = self.cache.get_or_load(key, load, refresh)
+        return source, inventories, recs
 
     def recommendations(self, query: dict[str, list[str]]) -> dict[str, Any]:
         kind, profile = self._source_params(query)
@@ -137,8 +149,14 @@ class FinOpsApp:
         _, _, recs = self._inventory(kind, profile, None, refresh=False)
         cutoff = today.toordinal() - 30
         anomalies = [e for e in detect_anomalies(result.records) if e.end.toordinal() >= cutoff]
-        return build_weekly_report(result.records, today=today, source=source.label, anomalies=anomalies,
-                                   recommendations=recs, forecast_amount=result.forecast_amount)
+        return build_weekly_report(
+            result.records,
+            today=today,
+            source=source.label,
+            anomalies=anomalies,
+            recommendations=recs,
+            forecast_amount=result.forecast_amount,
+        )
 
 
 def make_handler(app: FinOpsApp) -> type[BaseHTTPRequestHandler]:
@@ -159,8 +177,9 @@ def make_handler(app: FinOpsApp) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
         def _json(self, status: int, payload: Any) -> None:
-            self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                       "application/json; charset=utf-8")
+            self._send(
+                status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8"
+            )
 
         def _static(self, relative: str) -> None:
             path = (STATIC_DIR / relative).resolve()
@@ -187,22 +206,32 @@ def make_handler(app: FinOpsApp) -> type[BaseHTTPRequestHandler]:
                 elif url.path == "/api/relatorio":
                     body = app.weekly_report(query).encode("utf-8")
                     name = f"relatorio-finops-{date.today().isoformat()}.md"
-                    self._send(HTTPStatus.OK, body, "text/markdown; charset=utf-8",
-                               {"Content-Disposition": f'attachment; filename="{name}"'})
+                    self._send(
+                        HTTPStatus.OK,
+                        body,
+                        "text/markdown; charset=utf-8",
+                        {"Content-Disposition": f'attachment; filename="{name}"'},
+                    )
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"erro": "rota não encontrada"})
-            except BadRequest as error:
+            except BadRequestError as error:
                 self._json(HTTPStatus.BAD_REQUEST, {"erro": str(error)})
             except ConfigError as error:
-                self._json(HTTPStatus.BAD_REQUEST, {
-                    "erro": f"arquivo de contas: {error}",
-                    "dica": "Copie accounts.example.toml para accounts.local.toml e preencha suas contas.",
-                })
+                self._json(
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "erro": f"arquivo de contas: {error}",
+                        "dica": "Copie accounts.example.toml para accounts.local.toml e preencha suas contas.",
+                    },
+                )
             except Exception as error:  # noqa: BLE001 - falhas da AWS viram uma mensagem amigável
-                self._json(HTTPStatus.BAD_GATEWAY, {
-                    "erro": str(error).splitlines()[0] if str(error) else type(error).__name__,
-                    "dica": "Renove o login com: aws login --profile finops-lab",
-                })
+                self._json(
+                    HTTPStatus.BAD_GATEWAY,
+                    {
+                        "erro": str(error).splitlines()[0] if str(error) else type(error).__name__,
+                        "dica": "Renove o login com: aws login --profile finops-lab",
+                    },
+                )
 
         def _method_not_allowed(self) -> None:
             self._json(HTTPStatus.METHOD_NOT_ALLOWED, {"erro": "somente GET"})
