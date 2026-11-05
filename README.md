@@ -1,211 +1,200 @@
-# FinOps AWS: monitoramento de custos multi-conta
+# FinOps AWS
 
 [![testes](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml/badge.svg)](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml)
 ![cobertura](https://img.shields.io/badge/cobertura-92%25-brightgreen)
 ![python](https://img.shields.io/badge/python-3.12%20%7C%203.14-blue)
 [![ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
 [![mypy](https://img.shields.io/badge/tipos-mypy-2a6db2)](https://mypy-lang.org/)
+[![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-lightgrey)](LICENSE)
 
-Projeto pessoal de estudo para aprender **FinOps na AWS** na prática. A ideia é construir, passo a passo, uma aplicação que:
+**Monitoramento de custos AWS para várias contas**: mostra onde o dinheiro está indo, avisa quando algo foge do padrão e aponta o que dá para economizar, com o comando exato para agir.
 
-- reúne os custos de **várias contas AWS** num só lugar, usando APIs e roles somente leitura;
-- mostra **dashboards** de custo por conta, serviço, tag e período;
-- encontra **oportunidades de economia**: recursos ociosos, tamanho exagerado, armazenamento antigo etc.
+Roda **no seu computador**, acessa a AWS só com **permissão de leitura** e tem uma interface web **feita à mão** (HTML, CSS e JavaScript puros, sem frameworks).
 
-> Projeto de curiosidade e portfólio. **Nenhuma empresa está envolvida** e nenhum dado real de terceiros é usado.
+🇺🇸 [English version](README.en.md)
 
-## Arquitetura planejada
+![Aba de custos: indicadores, custo diário por serviço com a anomalia marcada, rankings e previsão do mês](docs/img/custos-claro.png)
+
+---
+
+## O que faz
+
+| | |
+|---|---|
+| 📊 **Custos** | Total, média diária, mês até ontem e **previsão de fechamento**. Custo diário por serviço, ranking por conta e por serviço. |
+| ⚠️ **Anomalias** | Detecta dias fora do padrão em cada conta e serviço (mediana + MAD), com o custo extra de cada evento. |
+| 💡 **Economia** | 7 regras: instância ociosa, volume EBS sem uso, IP elástico parado, instância parada, gp2→gp3, snapshot antigo/órfão e recursos sem tags. Cada uma com **economia mensal estimada** e a ação sugerida. |
+| 🏢 **Várias contas** | Assume uma role **somente leitura** em cada conta (`sts:AssumeRole`), sem chaves espalhadas. Se uma conta falhar, as outras continuam. |
+| 📝 **Relatório semanal** | Markdown pronto para e-mail, Slack ou wiki: semana × semana anterior, anomalias e maiores oportunidades. |
+
+<table>
+  <tr>
+    <td width="72%"><img src="docs/img/recomendacoes-escuro.png" alt="Aba de recomendações no tema escuro: economia potencial de US$ 297/mês, gráfico por tipo e tabela com ação sugerida"></td>
+    <td width="28%"><img src="docs/img/celular-escuro.png" alt="Interface no celular, tema escuro"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Recomendações, tema escuro</sub></td>
+    <td align="center"><sub>Celular</sub></td>
+  </tr>
+</table>
+
+<sub>As capturas usam o modo de **dados de exemplo**: 3 contas fictícias com desperdício e uma anomalia plantados de propósito.</sub>
+
+## Início rápido (sem conta AWS)
+
+Requer Python 3.12 ou mais novo.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m finops web        # abre http://127.0.0.1:8000 com os dados de exemplo
+```
+
+## Destaques técnicos
+
+| Decisão | Por quê |
+|---|---|
+| **Cache com regra de validade** ([`cache.py`](src/finops/cache.py)) | O Cost Explorer cobra US$ 0,01 por chamada. Período fechado fica em cache para sempre; mês aberto (estimado) expira em 6 h. |
+| **Role somente leitura em CloudFormation** ([template](infra/cloudformation/finops-readonly-role.yaml)) | Menor privilégio, com a prova no [diário 04](docs/diario/04-multi-conta-assume-role.md): `CreateVolume` → `UnauthorizedOperation`. |
+| **Mediana + MAD para anomalias** ([`anomalies.py`](src/finops/anomalies.py)) | O próprio pico não distorce a linha de base. Acha exatamente a anomalia plantada, sem falsos positivos nas outras 23 séries. |
+| **Economia estimada com honestidade** ([`recommendations.py`](src/finops/recommendations.py)) | Sem contagem dupla (gp2→gp3 × instância parada) e com snapshots tratados como incrementais: o total caiu de US$ 484 para US$ 297, um número defensável. |
+| **Servidor só com a biblioteca padrão** ([`server.py`](src/finops/web/server.py)) | `127.0.0.1`, só GET, CSP `default-src 'self'`, bloqueio de *path traversal*: tudo coberto por testes. |
+| **Gráficos SVG desenhados à mão** ([`charts.js`](src/finops/web/static/charts.js)) | Escalas, eixos, tooltip e cursor sem biblioteca; paleta validada para daltonismo, com tema escuro próprio. |
+| **Cliente de exemplo no formato da API real** ([`sample_client.py`](src/finops/sample_client.py)) | O resto do código não distingue dado real de exemplo: dá para demonstrar e testar sem AWS. |
+| **SCP tratada como governança, não como erro** ([diário 06](docs/diario/06-motor-de-recomendacoes.md)) | A conta vive numa organização que bloqueia 16 regiões; o inventário mostra isso numa linha em vez de 16 erros. |
+
+## Arquitetura
 
 ```mermaid
 flowchart LR
     subgraph Contas AWS monitoradas
         A1[Conta A<br/>role FinOpsReadOnly]
         A2[Conta B<br/>role FinOpsReadOnly]
-        A3[Conta N ...]
     end
-    C[Coletor Python<br/>boto3 + STS AssumeRole] -->|assume role| A1
-    C -->|assume role| A2
-    C -->|assume role| A3
-    C --> K[(Cache local<br/>evita custo de API)]
-    K --> R[Motor de<br/>recomendações]
-    K --> D[Interface web própria<br/>HTML/CSS/JS + http.server]
-    R --> D
+    CLI[CLI<br/>python -m finops] --> CORE
+    WEB[Interface web<br/>HTML/CSS/JS + http.server] --> CORE
+    CORE[Coletor, inventário,<br/>recomendações e anomalias] -->|sts:AssumeRole| A1
+    CORE -->|sts:AssumeRole| A2
+    CORE --> K[(Cache local<br/>data/cache)]
 ```
 
-**Fontes de dados AWS usadas:**
-
-| Fonte | Uso | Custo |
+| Fonte AWS | Uso | Custo |
 |---|---|---|
-| Cost Explorer API | Custos por serviço, conta, tag e previsão | US$ 0,01 por requisição |
-| Compute Optimizer | Sugestões de tamanho certo (EC2, EBS, Lambda) | Gratuito |
-| Budgets | Alertas de gasto | Básico gratuito |
-| EC2 / EBS / S3 APIs | Inventário para achar desperdício | Gratuito |
-| Data Exports (CUR 2.0) + Athena | Detalhe completo de faturamento (fase avançada) | S3 + consultas |
+| Cost Explorer | Custos por serviço/conta e previsão | US$ 0,01 por requisição (com cache) |
+| EC2 / EBS (`Describe*`) | Inventário para as recomendações | Gratuito |
+| CloudWatch | CPU de 14 dias das instâncias | Centavos por milhares de métricas |
+| Budgets | Verificação de acesso | Gratuito |
 
-## Roteiro
+## Comandos
 
-- [x] **Fase 1: Fundação**
-  - [x] Ferramentas instaladas (Git, Python 3.14, AWS CLI v2)
-  - [x] Repositório criado com `.gitignore` protegendo credenciais
-  - [x] Conta AWS criada (Free plan, login pelo GitHub com 2FA)
-  - [x] Budget com alerta e Cost Explorer ativado
-  - [x] Acesso pelo CLI com credenciais temporárias (`aws login`) e primeira consulta de custos pela API
-- [x] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com cache e modo de dados de exemplo
-- [x] **Fase 3: Várias contas**: role `FinOpsReadOnly` em CloudFormation, arquivo de contas e `sts:AssumeRole`
-- [x] **Fase 4: Dashboard**: visão por conta, serviço, tendência e previsão (primeira versão em Streamlit, substituída na fase 7)
-- [x] **Fase 5: Recomendações** (com economia mensal estimada)
-  - [x] Volumes EBS gp2 que podem virar gp3
-  - [x] Volumes EBS sem uso e IPs elásticos ociosos
-  - [x] Snapshots antigos e órfãos
-  - [x] Instâncias paradas, ociosas ou maiores do que precisam
-  - [x] Recursos sem tags de alocação de custo
-- [x] **Fase 6: Anomalias e relatórios**
-  - [x] Detecção de anomalias (mediana + MAD por conta e serviço), na interface e na CLI
-  - [x] Relatório semanal em Markdown (custos, anomalias, economia)
-  - [x] CI no GitHub Actions (testes em Python 3.12 e 3.14 + teste de fumaça da CLI)
-- [x] **Fase 7: Interface web feita à mão**
-  - [x] Servidor HTTP local só com a biblioteca padrão do Python (`127.0.0.1`, somente GET, CSP `'self'`)
-  - [x] API JSON (`/api/custos`, `/api/recomendacoes`, `/api/relatorio`)
-  - [x] Frontend em HTML, CSS e JavaScript puros, com gráficos SVG desenhados à mão e tema claro/escuro
-  - [x] Streamlit removido: o projeto ficou só com `boto3` como dependência de execução
-- [ ] **Próximos passos**
-  - [ ] CUR 2.0 + Athena para custo por recurso (bloqueado nesta conta pela SCP em us-east-1)
-  - [ ] Envio automático do relatório (SNS/e-mail ou GitHub Actions com OIDC)
-  - [ ] Comparar com o AWS Cost Anomaly Detection
+| Comando | O que faz |
+|---|---|
+| `finops web` | Interface web em `http://127.0.0.1:8000` |
+| `finops resumo` | Resumo de custos no terminal (`--csv` exporta) |
+| `finops recomendacoes` | Oportunidades de economia (`--regioes`, `--csv`) |
+| `finops anomalias` | Eventos de custo fora do padrão (`--sensibilidade`) |
+| `finops relatorio` | Relatório semanal em Markdown (`--saida arquivo.md`) |
+| `finops verificar-contas` | Testa o AssumeRole e a leitura em cada conta |
+| `finops limpar-cache` | Apaga as respostas da AWS guardadas em cache |
 
-## Como rodar
+Todos aceitam `--fonte exemplo` (padrão, sem AWS), `--fonte aws --perfil <perfil>` (uma conta) ou `--fonte contas` (várias, via `accounts.local.toml`).
 
-Requisitos: Python 3.12+ e, para dados reais, o AWS CLI v2 logado (`aws login --profile finops-lab`).
+## Usar com contas reais
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-
-# Interface web própria (HTML/CSS/JS feitos à mão) em http://127.0.0.1:8000
-.\.venv\Scripts\python.exe -m finops web
-
-# Resumo com dados de exemplo (não acessa a AWS, custo zero)
-.\.venv\Scripts\python.exe -m finops resumo
-
-# Resumo da sua conta (cada chamada nova ao Cost Explorer custa US$ 0,01; repetições vêm do cache)
-.\.venv\Scripts\python.exe -m finops resumo --fonte aws --perfil finops-lab --dias 30
-
-# Várias contas via AssumeRole (configure accounts.local.toml antes)
-.\.venv\Scripts\python.exe -m finops verificar-contas
-.\.venv\Scripts\python.exe -m finops resumo --fonte contas
-
-# Recomendações de economia (exemplo, ou --fonte contas para as contas reais)
-.\.venv\Scripts\python.exe -m finops recomendacoes
-.\.venv\Scripts\python.exe -m finops recomendacoes --fonte contas --regioes us-east-2
-
-# Anomalias de custo e relatório semanal
-.\.venv\Scripts\python.exe -m finops anomalias
-.\.venv\Scripts\python.exe -m finops relatorio --saida data/exports/relatorio.md
-
-# Exportar custos diários por conta e serviço
-.\.venv\Scripts\python.exe -m finops resumo --csv data/exports/custos.csv
-
-# Testes
-.\.venv\Scripts\python.exe -m pytest
-```
-
-Exemplo de saída com dados de exemplo:
-
-```
-FinOps AWS: resumo de custos (fonte: dados de exemplo)
-Período: 2026-10-06 a 2026-11-04 (30 dias)
-
-  Total no período ........ US$ 1.184,92
-  Média diária ............ US$ 39,50
-  Mês atual até ontem ..... US$ 147,95
-  Previsão de fechamento .. US$ 1.107,23
-
-Top serviços:
-  Amazon Elastic Compute Cloud - Compute      US$ 589,50   49,7%  ██████████
-  Amazon Relational Database Service          US$ 283,90   24,0%  █████
-  EC2 - Other                                 US$ 122,96   10,4%  ██
-  ...
-
-Custo diário (últimos 14 dias):  ▁▁▅▆█▁▁▁▁▁▁▁▁▁
-  Dia mais caro: 2026-10-26 com US$ 65,74
-```
-
-## Qualidade de código
-
-| Ferramenta | O que garante | Onde roda |
-|---|---|---|
-| **ruff** (lint) | erros comuns, imports, segurança (regras do bandit), boas práticas de pytest | pre-commit e CI |
-| **ruff format** | estilo padronizado em todo o código | pre-commit e CI |
-| **mypy** | tipos consistentes em todo `src/` | pre-commit e CI |
-| **pytest + coverage** | 80 testes, cobertura mínima de **90%** (atual: 92%) | CI, em Python 3.12 e 3.14 |
-| **pre-commit** | as checagens acima + chaves privadas/AWS, arquivos grandes, YAML/TOML | antes de cada commit |
-
-```powershell
-.\.venv\Scripts\Activate.ps1                   # ative o ambiente (o pre-commit usa as ferramentas dele)
-python -m pre_commit install                   # uma vez: liga as checagens no git commit
-python -m ruff check; python -m ruff format    # lint e formatação
-python -m mypy                                 # tipos
-python -m pytest --cov                         # testes com cobertura
-```
-
-## Adicionar uma conta para monitorar
-
-1. Na conta que será monitorada, implante a role somente leitura, informando o ID da conta hub (de onde o coletor roda):
+1. Faça login no AWS CLI: `aws login --profile finops-lab` (credenciais temporárias, sem chaves).
+2. Em cada conta monitorada, implante a role somente leitura, informando o ID da conta "hub" (de onde o coletor roda):
    ```powershell
    aws cloudformation deploy --template-file infra/cloudformation/finops-readonly-role.yaml `
      --stack-name finops-readonly-role --capabilities CAPABILITY_NAMED_IAM `
      --parameter-overrides TrustedAccountId=<ID_DA_CONTA_HUB> --profile <perfil-da-conta>
    ```
-2. Adicione a conta em `accounts.local.toml` (copie de [`accounts.example.toml`](accounts.example.toml)).
-3. Teste com `python -m finops verificar-contas`.
+3. Copie [`accounts.example.toml`](accounts.example.toml) para `accounts.local.toml` (ignorado pelo Git) e liste as contas.
+4. Confira: `python -m finops verificar-contas`. Depois, `python -m finops web` e escolha **Várias contas**.
 
-## Princípios de segurança
+O passo a passo de criação da conta AWS está em [docs/checklist-conta-aws.md](docs/checklist-conta-aws.md).
 
-1. **Nenhuma credencial no repositório.** O acesso usa perfis do AWS CLI com credenciais temporárias (`aws login`), nunca chaves no código.
-2. **Somente leitura.** A aplicação só lê dados e nunca altera recursos nas contas.
-3. **Menor privilégio.** Cada conta monitorada expõe uma role com permissões mínimas de leitura.
-4. **Dados reais fora do Git.** Exportações e cache ficam em `data/`, que é ignorada pelo Git.
+## Segurança
 
-## Diário de estudos
+- **Nenhuma credencial no repositório**: perfis do AWS CLI com credenciais temporárias; o pre-commit bloqueia chaves privadas e credenciais AWS.
+- **Somente leitura**: a role não tem nenhuma permissão de escrita, e a interface só aceita GET.
+- **Dados reais fora do Git**: cache, exportações e o arquivo de contas são ignorados.
+- **Interface local**: escuta só em `127.0.0.1`, com Content-Security-Policy restrita e DOM montado sem `innerHTML`.
 
-Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
+## Qualidade de código
 
-- [01: Preparação do ambiente](docs/diario/01-preparacao-ambiente.md)
-- [02: Conta AWS e primeiro acesso pela API](docs/diario/02-conta-aws-e-primeiro-acesso.md)
-- [03: Coletor do Cost Explorer com cache](docs/diario/03-coletor-cost-explorer.md)
-- [04: Várias contas com AssumeRole](docs/diario/04-multi-conta-assume-role.md)
-- [05: Dashboard em Streamlit](docs/diario/05-dashboard-streamlit.md)
-- [06: Motor de recomendações](docs/diario/06-motor-de-recomendacoes.md)
-- [07: Anomalias, relatório semanal e CI](docs/diario/07-anomalias-relatorio-ci.md)
-- [08: Interface web feita à mão](docs/diario/08-interface-web-feita-a-mao.md)
-- [09: Qualidade de código (ruff, mypy, cobertura, pre-commit)](docs/diario/09-qualidade-de-codigo.md)
+| Ferramenta | O que garante |
+|---|---|
+| **ruff** | lint (incluindo regras de segurança) e formatação padronizada |
+| **mypy** | tipos consistentes em todo `src/` |
+| **pytest + coverage** | 80 testes, sem acessar a AWS (botocore `Stubber` e servidor HTTP real em porta livre); cobertura mínima de 90% (atual: 92%) |
+| **pre-commit** | todas as checagens antes de cada commit |
+| **GitHub Actions** | lint, tipos e testes em Python 3.12 e 3.14 em todo PR |
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\Activate.ps1
+python -m pre_commit install       # liga as checagens no git commit
+python -m pytest --cov             # testes com cobertura
+```
 
 ## Estrutura
 
 ```
 finops-aws/
-├── docs/
-│   ├── diario/            # registro de cada etapa
-│   └── checklist-conta-aws.md
-├── infra/cloudformation/  # role FinOpsReadOnly para cada conta monitorada
 ├── src/finops/
-│   ├── accounts.py        # leitura e validação do accounts.local.toml
-│   ├── aws_session.py     # perfil do CLI e AssumeRole
-│   ├── collector.py       # coleta de várias contas, isolando falhas
-│   ├── cost_explorer.py   # acesso à API, paginação e cache
-│   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
-│   ├── sample_client.py   # cliente falso com dados de exemplo realistas
-│   ├── anomalies.py       # detecção de anomalias (mediana + MAD)
-│   ├── weekly_report.py   # relatório semanal em Markdown
-│   ├── inventory.py       # inventário EC2/EBS/snapshots/IPs em todas as regiões
-│   ├── pricing.py         # tabela de preços de referência
-│   ├── recommendations.py # regras de desperdício e economia estimada
-│   ├── report.py          # resumo, formatação e exportação CSV
-│   ├── sources.py         # fontes de dados (exemplo, perfil, várias contas)
-│   ├── web/               # interface própria: server.py (http.server), api.py e static/ (HTML/CSS/JS)
-│   └── cli.py             # linha de comando (python -m finops)
-├── tests/                 # pytest + botocore Stubber (sem acessar a AWS)
-├── data/                  # cache e exportações (ignorado pelo Git)
-├── pyproject.toml
-└── README.md
+│   ├── cli.py                # linha de comando (python -m finops)
+│   ├── sources.py            # fontes de dados: exemplo, uma conta, várias contas
+│   ├── cost_explorer.py      # API do Cost Explorer com paginação e cache
+│   ├── cache.py              # cache em disco (fechado = permanente, estimado = 6 h)
+│   ├── collector.py          # coleta multi-conta com falhas isoladas
+│   ├── accounts.py           # leitura e validação do accounts.local.toml
+│   ├── aws_session.py        # perfil do CLI e AssumeRole
+│   ├── inventory.py          # inventário EC2/EBS/snapshots/IPs em todas as regiões
+│   ├── pricing.py            # tabela de preços de referência
+│   ├── recommendations.py    # regras de desperdício e economia estimada
+│   ├── anomalies.py          # detecção de anomalias (mediana + MAD)
+│   ├── weekly_report.py      # relatório semanal em Markdown
+│   ├── report.py             # saída de texto e CSV da CLI
+│   ├── sample_client.py      # dados de exemplo no formato da API real
+│   ├── sample_inventory.py   # inventário de exemplo com desperdício proposital
+│   └── web/
+│       ├── server.py         # http.server da biblioteca padrão
+│       ├── api.py            # monta o JSON da interface
+│       └── static/           # index.html, styles.css, app.js, charts.js
+├── infra/cloudformation/     # role FinOpsReadOnly
+├── tests/                    # 80 testes
+├── docs/
+│   ├── diario/               # o registro de cada etapa
+│   └── img/                  # capturas de tela
+└── pyproject.toml
 ```
+
+## Como o projeto foi construído
+
+Cada etapa virou um PR e uma entrada no diário, com o que foi feito, as decisões, os problemas encontrados e o que aprendi.
+
+| Versão | Etapa | Diário |
+|---|---|---|
+| v0.1 | Conta AWS, budget e primeiro acesso pela API | [01](docs/diario/01-preparacao-ambiente.md), [02](docs/diario/02-conta-aws-e-primeiro-acesso.md) |
+| v0.2 | Coletor do Cost Explorer com cache | [03](docs/diario/03-coletor-cost-explorer.md) |
+| v0.3 | Várias contas com AssumeRole | [04](docs/diario/04-multi-conta-assume-role.md) |
+| v0.4 | Primeiro dashboard (Streamlit) | [05](docs/diario/05-dashboard-streamlit.md) |
+| v0.5 | Motor de recomendações | [06](docs/diario/06-motor-de-recomendacoes.md) |
+| v0.6 | Anomalias, relatório semanal e CI | [07](docs/diario/07-anomalias-relatorio-ci.md) |
+| v0.7 | Interface web feita à mão | [08](docs/diario/08-interface-web-feita-a-mao.md) |
+| v0.8 | Qualidade de código | [09](docs/diario/09-qualidade-de-codigo.md) |
+| v1.0 | README de portfólio, licença e releases | [10](docs/diario/10-readme-de-portfolio.md) |
+
+O histórico completo de mudanças está no [CHANGELOG](CHANGELOG.md).
+
+## Próximos passos
+
+- [ ] Relatório semanal automático pelo GitHub Actions com **OIDC** (sem chaves guardadas)
+- [ ] Histórico de custos em **SQLite**, para tendências de meses sem pagar a API de novo
+- [ ] Custo por **tag** (showback por projeto e ambiente)
+- [ ] Cobertura de **Savings Plans e Reserved Instances**
+- [ ] **CUR 2.0 + Athena** para custo por recurso, numa conta sem a restrição de região da SCP
+
+## Licença
+
+[MIT](LICENSE). Projeto pessoal de estudo e portfólio: nenhuma empresa envolvida e nenhum dado real de terceiros.
