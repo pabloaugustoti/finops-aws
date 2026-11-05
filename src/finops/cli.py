@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from finops.accounts import ConfigError, load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
-from finops.collector import ClientFactory, collect
-from finops.report import build_summary, export_csv, fmt_usd, render_text
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
-from finops.sample_client import SAMPLE_ACCOUNTS, SampleCostExplorerClient
+from finops.report import build_summary, export_csv, fmt_usd, render_text
+from finops.sources import (
+    DEFAULT_ACCOUNTS_FILE,
+    DEFAULT_CACHE_DIR,
+    SOURCE_KINDS,
+    build_source,
+    run_collection,
+)
 
-DEFAULT_CACHE_DIR = Path("data/cache")
-DEFAULT_ACCOUNTS_FILE = Path("accounts.local.toml")
+DASHBOARD_APP = Path(__file__).parent / "dashboard" / "app.py"
 
 
 def utc_today() -> date:
@@ -30,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     summary = commands.add_parser("resumo", help="resumo de custos por conta e serviço")
     summary.add_argument(
-        "--fonte", choices=["exemplo", "aws", "contas"], default="exemplo",
+        "--fonte", choices=SOURCE_KINDS, default="exemplo",
         help="'exemplo': dados fictícios de 3 contas; 'aws': só a conta do --perfil; "
              "'contas': todas as contas do --config via AssumeRole (padrão: exemplo)",
     )
@@ -46,35 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
 
+    dashboard = commands.add_parser("dashboard", help="abre o dashboard no navegador (Streamlit)")
+    dashboard.add_argument("--porta", type=int, default=8501)
+
     clear = commands.add_parser("limpar-cache", help="apaga as respostas da AWS guardadas em cache")
     clear.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
     return parser
-
-
-def _sources(args: argparse.Namespace, today: date) -> tuple[list[str], ClientFactory, str, bool]:
-    """Devolve (contas, fábrica de clientes, descrição da fonte, usa API paga)."""
-    if args.fonte == "exemplo":
-        def sample_factory(name: str) -> SampleCostExplorerClient:
-            seed, scale, spike = SAMPLE_ACCOUNTS[name]
-            return SampleCostExplorerClient(today=today, seed=seed, scale=scale, spike=spike)
-
-        return list(SAMPLE_ACCOUNTS), sample_factory, "dados de exemplo", False
-
-    if args.fonte == "aws":
-        def profile_factory(_: str):
-            return profile_session(args.perfil).client("ce", region_name=BILLING_REGION)
-
-        return [args.perfil], profile_factory, f"AWS, perfil {args.perfil}", True
-
-    config = load_accounts(args.config)
-    by_name = {a.name: a for a in config.accounts}
-    sts = profile_session(config.hub_profile).client("sts")
-
-    def assume_factory(name: str):
-        return assume_role_session(sts, by_name[name]).client("ce", region_name=BILLING_REGION)
-
-    label = f"AWS, {len(by_name)} conta(s) via AssumeRole a partir do perfil {config.hub_profile}"
-    return list(by_name), assume_factory, label, True
 
 
 def run_summary(args: argparse.Namespace, today: date) -> int:
@@ -82,22 +64,16 @@ def run_summary(args: argparse.Namespace, today: date) -> int:
         print("erro: --dias precisa estar entre 1 e 365", file=sys.stderr)
         return 2
 
-    names, factory, source, paid = _sources(args, today)
-    cache = JsonCache(args.cache_dir) if paid and not args.sem_cache else None
-
-    month_start = today.replace(day=1)
-    start = min(today - timedelta(days=args.dias), month_start)
-    next_month = (month_start + timedelta(days=32)).replace(day=1)
-
-    result = collect(names, factory, start=start, end=today, forecast_end=next_month, cache=cache)
+    source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
+    result = run_collection(source, today, args.dias, use_cache=not args.sem_cache, cache_dir=args.cache_dir)
     summary = build_summary(result.records, today=today, days=args.dias, forecast_amount=result.forecast_amount)
-    print(render_text(summary, source=source, top=args.top, warnings=result.errors,
+    print(render_text(summary, source=source.label, top=args.top, warnings=result.errors,
                       forecast_is_partial=result.forecast_is_partial))
 
     if args.csv:
         export_csv(result.records, args.csv)
         print(f"\nCSV salvo em {args.csv}")
-    if paid:
+    if source.paid:
         print(f"\nChamadas pagas à API do Cost Explorer nesta execução: {result.api_calls} "
               f"(~{fmt_usd(result.api_calls * PRICE_PER_REQUEST_USD)})")
     return 1 if result.errors and not result.records else 0
@@ -127,6 +103,15 @@ def run_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def run_dashboard(args: argparse.Namespace) -> int:
+    command = [sys.executable, "-m", "streamlit", "run", str(DASHBOARD_APP),
+               "--server.port", str(args.porta), "--browser.gatherUsageStats", "false"]
+    try:
+        return subprocess.call(command)
+    except KeyboardInterrupt:
+        return 0
+
+
 def main(argv: list[str] | None = None, today: date | None = None) -> int:
     # Garante que os caracteres de gráfico (█ ▁▂▃) não quebrem consoles antigos do Windows.
     if hasattr(sys.stdout, "reconfigure"):
@@ -137,6 +122,8 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
         removed = JsonCache(args.cache_dir).clear()
         print(f"{removed} arquivo(s) removido(s) de {args.cache_dir}")
         return 0
+    if args.command == "dashboard":
+        return run_dashboard(args)
 
     from botocore.exceptions import BotoCoreError, ClientError
 

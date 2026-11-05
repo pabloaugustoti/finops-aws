@@ -29,6 +29,7 @@ dist/
 build/
 
 # ===== Editores / SO =====
+.claude/
 .vscode/
 .idea/
 Thumbs.db
