@@ -12,7 +12,8 @@ requires-python = ">=3.12"
 dependencies = ["boto3[crt]>=1.35"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dashboard = ["streamlit>=1.45"]
+dev = ["pytest>=8", "finops-aws[dashboard]"]
 
 [project.scripts]
 finops = "finops.cli:main"

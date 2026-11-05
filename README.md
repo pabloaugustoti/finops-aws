@@ -46,7 +46,7 @@ flowchart LR
   - [x] Acesso pelo CLI com credenciais temporárias (`aws login`) e primeira consulta de custos pela API
 - [x] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com cache e modo de dados de exemplo
 - [x] **Fase 3: Várias contas**: role `FinOpsReadOnly` em CloudFormation, arquivo de contas e `sts:AssumeRole`
-- [ ] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
+- [x] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
 - [ ] **Fase 5: Recomendações**
   - [ ] Volumes EBS gp2 que podem virar gp3
   - [ ] Volumes EBS sem uso e IPs elásticos ociosos
@@ -62,6 +62,9 @@ Requisitos: Python 3.12+ e, para dados reais, o AWS CLI v2 logado (`aws login --
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+# Dashboard no navegador (http://localhost:8501)
+.\.venv\Scripts\python.exe -m finops dashboard
 
 # Resumo com dados de exemplo (não acessa a AWS, custo zero)
 .\.venv\Scripts\python.exe -m finops resumo
@@ -127,6 +130,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [02: Conta AWS e primeiro acesso pela API](docs/diario/02-conta-aws-e-primeiro-acesso.md)
 - [03: Coletor do Cost Explorer com cache](docs/diario/03-coletor-cost-explorer.md)
 - [04: Várias contas com AssumeRole](docs/diario/04-multi-conta-assume-role.md)
+- [05: Dashboard em Streamlit](docs/diario/05-dashboard-streamlit.md)
 
 ## Estrutura
 
@@ -144,6 +148,8 @@ finops-aws/
 │   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
 │   ├── sample_client.py   # cliente falso com dados de exemplo realistas
 │   ├── report.py          # resumo, formatação e exportação CSV
+│   ├── sources.py         # fontes de dados (exemplo, perfil, várias contas)
+│   ├── dashboard/         # app Streamlit + preparação de dados (pandas)
 │   └── cli.py             # linha de comando (python -m finops)
 ├── tests/                 # pytest + botocore Stubber (sem acessar a AWS)
 ├── data/                  # cache e exportações (ignorado pelo Git)
