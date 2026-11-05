@@ -11,16 +11,23 @@ if TYPE_CHECKING:
 
 BILLING_REGION = "us-east-1"  # Cost Explorer e Budgets respondem nesta região
 SESSION_NAME = "finops-coletor"
+# Perfil especial: usa as credenciais do ambiente (variáveis AWS_*), como as que o
+# GitHub Actions recebe via OIDC. Nenhum perfil do AWS CLI é necessário.
+ENVIRONMENT_PROFILE = "ambiente"
 
 
 def profile_session(profile: str) -> boto3.Session:
-    """Sessão do perfil do AWS CLI.
+    """Sessão do perfil do AWS CLI (ou das credenciais do ambiente, com o perfil "ambiente").
 
     Se o perfil não tiver região padrão, usamos us-east-1: a renovação automática das
     credenciais do `aws login` precisa de uma região, e sem ela tudo falha com
     "You must specify a region" depois que o primeiro token expira.
     """
     import boto3
+
+    if profile == ENVIRONMENT_PROFILE:
+        session = boto3.Session()
+        return session if session.region_name else boto3.Session(region_name=BILLING_REGION)
 
     session = boto3.Session(profile_name=profile)
     if session.region_name is None:
