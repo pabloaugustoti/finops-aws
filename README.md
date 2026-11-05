@@ -44,7 +44,7 @@ flowchart LR
   - [x] Conta AWS criada (Free plan, login pelo GitHub com 2FA)
   - [x] Budget com alerta e Cost Explorer ativado
   - [x] Acesso pelo CLI com credenciais temporárias (`aws login`) e primeira consulta de custos pela API
-- [ ] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com modo de dados de exemplo
+- [x] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com cache e modo de dados de exemplo
 - [ ] **Fase 3: Várias contas**: arquivo de configuração das contas e `sts:AssumeRole` em roles somente leitura
 - [ ] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
 - [ ] **Fase 5: Recomendações**
@@ -54,6 +54,48 @@ flowchart LR
   - [ ] Instâncias paradas, ociosas ou maiores do que precisam
   - [ ] Recursos sem tags de alocação de custo
 - [ ] **Fase 6: Avançado**: CUR 2.0 + Athena, detecção de anomalias, alertas
+
+## Como rodar
+
+Requisitos: Python 3.12+ e, para dados reais, o AWS CLI v2 logado (`aws login --profile finops-lab`).
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+# Resumo com dados de exemplo (não acessa a AWS, custo zero)
+.\.venv\Scripts\python.exe -m finops resumo
+
+# Resumo da sua conta (cada chamada nova ao Cost Explorer custa US$ 0,01; repetições vêm do cache)
+.\.venv\Scripts\python.exe -m finops resumo --fonte aws --perfil finops-lab --dias 30
+
+# Exportar custos diários por serviço
+.\.venv\Scripts\python.exe -m finops resumo --csv data/exports/custos.csv
+
+# Testes
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Exemplo de saída com dados de exemplo:
+
+```
+FinOps AWS: resumo de custos (fonte: dados de exemplo)
+Período: 2026-10-06 a 2026-11-04 (30 dias)
+
+  Total no período ........ US$ 1.184,92
+  Média diária ............ US$ 39,50
+  Mês atual até ontem ..... US$ 147,95
+  Previsão de fechamento .. US$ 1.107,23
+
+Top serviços:
+  Amazon Elastic Compute Cloud - Compute      US$ 589,50   49,7%  ██████████
+  Amazon Relational Database Service          US$ 283,90   24,0%  █████
+  EC2 - Other                                 US$ 122,96   10,4%  ██
+  ...
+
+Custo diário (últimos 14 dias):  ▁▁▅▆█▁▁▁▁▁▁▁▁▁
+  Dia mais caro: 2026-10-26 com US$ 65,74
+```
 
 ## Princípios de segurança
 
@@ -68,6 +110,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 
 - [01: Preparação do ambiente](docs/diario/01-preparacao-ambiente.md)
 - [02: Conta AWS e primeiro acesso pela API](docs/diario/02-conta-aws-e-primeiro-acesso.md)
+- [03: Coletor do Cost Explorer com cache](docs/diario/03-coletor-cost-explorer.md)
 
 ## Estrutura
 
@@ -76,7 +119,14 @@ finops-aws/
 ├── docs/
 │   ├── diario/            # registro de cada etapa
 │   └── checklist-conta-aws.md
-├── src/                   # código (a partir da fase 2)
+├── src/finops/
+│   ├── cost_explorer.py   # acesso à API, paginação e cache
+│   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
+│   ├── sample_client.py   # cliente falso com dados de exemplo realistas
+│   ├── report.py          # resumo, formatação e exportação CSV
+│   └── cli.py             # linha de comando (python -m finops)
+├── tests/                 # pytest + botocore Stubber (sem acessar a AWS)
 ├── data/                  # cache e exportações (ignorado pelo Git)
+├── pyproject.toml
 └── README.md
 ```

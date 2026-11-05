@@ -13,6 +13,7 @@ accounts.local.yaml
 # ===== Dados de custo reais (podem conter IDs de conta) =====
 data/raw/
 data/cache/
+data/exports/
 *.parquet
 
 # ===== Python =====

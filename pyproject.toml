@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finops-aws"
+version = "0.2.0"
+description = "Estudo de FinOps na AWS: coleta de custos, cache e relatórios."
+readme = "README.md"
+requires-python = ">=3.12"
+# [crt] é necessário para usar as credenciais do `aws login`
+dependencies = ["boto3[crt]>=1.35"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+finops = "finops.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
