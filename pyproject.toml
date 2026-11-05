@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]  # 77+ entende `license = "MIT"` (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "finops-aws"
-version = "0.2.0"
-description = "Estudo de FinOps na AWS: coleta de custos, cache e relatórios."
+version = "1.0.0"
+description = "Monitoramento de custos AWS multi-conta: custos, anomalias e recomendações de economia."
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "pabloaugustoti" }]
 requires-python = ">=3.12"
 # [crt] é necessário para usar as credenciais do `aws login`
 dependencies = ["boto3[crt]>=1.35"]

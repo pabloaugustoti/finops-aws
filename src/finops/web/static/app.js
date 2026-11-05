@@ -13,16 +13,26 @@ const store = {
   set(key, value) { try { localStorage.setItem(`finops.${key}`, value); } catch { /* modo privado */ } },
 };
 
+// Parâmetros da URL (ex.: ?aba=recomendacoes&tema=escuro&dias=90) têm prioridade sobre o que
+// ficou salvo: permitem compartilhar um link que já abre na visão certa.
+const url = new URLSearchParams(window.location.search);
+const fromUrl = {
+  fonte: ["exemplo", "aws", "contas"].includes(url.get("fonte")) ? url.get("fonte") : null,
+  aba: { custos: "custos", recomendacoes: "recs" }[url.get("aba")] ?? null,
+  tema: { auto: "auto", claro: "light", escuro: "dark" }[url.get("tema")] ?? null,
+  dias: ["7", "14", "30", "60", "90"].includes(url.get("dias")) ? url.get("dias") : null,
+};
+
 const state = {
-  fonte: store.get("fonte", "exemplo"),
+  fonte: fromUrl.fonte ?? store.get("fonte", "exemplo"),
   perfil: store.get("perfil", "finops-lab"),
-  dias: Number(store.get("dias", "30")),
+  dias: Number(fromUrl.dias ?? store.get("dias", "30")),
   contas: null, // null = todas
-  aba: store.get("aba", "custos"),
+  aba: fromUrl.aba ?? store.get("aba", "custos"),
   categoria: "todas",
   busca: "",
   ordem: { chave: "economia_mes", direcao: "desc" },
-  tema: store.get("tema", "auto"),
+  tema: fromUrl.tema ?? store.get("tema", "auto"),
 };
 let costs = null;
 let recs = null;
