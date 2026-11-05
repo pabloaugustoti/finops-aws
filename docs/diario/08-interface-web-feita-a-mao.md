@@ -66,6 +66,16 @@ flowchart LR
 | Teste com espaço na URL quebrava no cliente HTTP | O parâmetro passou a ser codificado (`%20`) |
 | `/favicon.ico` → 404 | Rota servindo o ícone SVG |
 
+## Remoção do Streamlit
+
+Com a interface própria cobrindo tudo o que o dashboard fazia (e mais: tooltip por dia, tabela ordenável, busca e CSV para o Excel), o Streamlit saiu do projeto:
+- foram removidos `src/finops/dashboard/`, o comando `finops dashboard` e o extra `[dashboard]`;
+- a única dependência de execução passou a ser o `boto3`;
+- sem pandas, Altair e Streamlit, a instalação ficou bem menor e mais rápida, inclusive na CI;
+- os testes de fontes de dados que estavam junto dos testes do dashboard foram para `tests/test_sources.py`.
+
+O [diário 05](05-dashboard-streamlit.md) continua no histórico como registro da primeira versão.
+
 ## O que aprendi
 
 - Um servidor web útil cabe na biblioteca padrão do Python, sem framework.
