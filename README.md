@@ -38,11 +38,12 @@ flowchart LR
 
 ## Roteiro
 
-- [ ] **Fase 1: Fundação**
+- [x] **Fase 1: Fundação**
   - [x] Ferramentas instaladas (Git, Python 3.14, AWS CLI v2)
   - [x] Repositório criado com `.gitignore` protegendo credenciais
-  - [ ] Conta AWS criada, MFA no root, usuário administrativo via IAM Identity Center
-  - [ ] Budget com alerta e Cost Explorer ativado
+  - [x] Conta AWS criada (Free plan, login pelo GitHub com 2FA)
+  - [x] Budget com alerta e Cost Explorer ativado
+  - [x] Acesso pelo CLI com credenciais temporárias (`aws login`) e primeira consulta de custos pela API
 - [ ] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com modo de dados de exemplo
 - [ ] **Fase 3: Várias contas**: arquivo de configuração das contas e `sts:AssumeRole` em roles somente leitura
 - [ ] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
@@ -56,7 +57,7 @@ flowchart LR
 
 ## Princípios de segurança
 
-1. **Nenhuma credencial no repositório.** O acesso usa perfis do AWS CLI (`aws configure sso`), nunca chaves no código.
+1. **Nenhuma credencial no repositório.** O acesso usa perfis do AWS CLI com credenciais temporárias (`aws login`), nunca chaves no código.
 2. **Somente leitura.** A aplicação só lê dados e nunca altera recursos nas contas.
 3. **Menor privilégio.** Cada conta monitorada expõe uma role com permissões mínimas de leitura.
 4. **Dados reais fora do Git.** Exportações e cache ficam em `data/`, que é ignorada pelo Git.
@@ -66,6 +67,7 @@ flowchart LR
 Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 
 - [01: Preparação do ambiente](docs/diario/01-preparacao-ambiente.md)
+- [02: Conta AWS e primeiro acesso pela API](docs/diario/02-conta-aws-e-primeiro-acesso.md)
 
 ## Estrutura
 
