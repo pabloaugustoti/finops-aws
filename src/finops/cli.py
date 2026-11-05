@@ -13,6 +13,7 @@ from finops.anomalies import AnomalyEvent, detect_anomalies
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
+from finops.history import DEFAULT_HISTORY_FILE, HistoryStore, MonthTotal
 from finops.models import UNTAGGED, CostRecord
 from finops.recommendations import analyze
 from finops.report import (
@@ -110,6 +111,21 @@ def build_parser() -> argparse.ArgumentParser:
     tags.add_argument("--chave", default="Project", help="chave da tag (padrão: Project)")
     tags.add_argument("--dias", type=int, default=30)
     tags.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
+    history = commands.add_parser("historico", help="histórico mensal guardado em SQLite (data/historico.sqlite)")
+    history.add_argument(
+        "acao",
+        choices=["mostrar", "salvar"],
+        nargs="?",
+        default="mostrar",
+        help="'salvar' coleta e grava; 'mostrar' (padrão) lê o que já foi gravado",
+    )
+    history.add_argument("--fonte", choices=["aws", "contas"], default="contas", help="fonte para 'salvar'")
+    history.add_argument("--perfil", default="finops-lab")
+    history.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    history.add_argument("--dias", type=int, default=90, help="dias coletados no 'salvar' (padrão: 90)")
+    history.add_argument("--arquivo", type=Path, default=DEFAULT_HISTORY_FILE)
+    history.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
 
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
@@ -265,6 +281,42 @@ def run_tags_command(args: argparse.Namespace, today: date) -> int:
     return 0
 
 
+def render_history(months: list[MonthTotal]) -> list[str]:
+    lines = ["  Mês        Total            Variação"]
+    previous: Decimal | None = None
+    for m in months:
+        change = ""
+        if previous and not m.estimated:
+            delta = m.amount / previous - 1
+            change = f"{'▲' if delta > 0 else '▼'} {fmt_pct(abs(delta))}"
+        partial = "*" if m.estimated else " "
+        lines.append(f"  {m.month}{partial}   {fmt_usd(m.amount):>14}   {change}")
+        previous = m.amount
+    if any(m.estimated for m in months):
+        lines.append("\n  * mês com valores estimados (a fatura ainda não fechou)")
+    return lines
+
+
+def run_history(args: argparse.Namespace, today: date) -> int:
+    with HistoryStore(args.arquivo) as store:
+        if args.acao == "salvar":
+            source = build_source(args.fonte, today, profile=args.perfil, config_path=args.config)
+            result = run_collection(source, today, args.dias, cache_dir=args.cache_dir)
+            saved = store.save(result.records)
+            print(f"{saved} linha(s) gravada(s) em {args.arquivo} (fonte: {source.label})")
+            for message in result.errors:
+                print(f"⚠ {message}")
+        coverage = store.coverage()
+        if not coverage.rows:
+            print(f"Histórico vazio em {args.arquivo}. Rode: python -m finops historico salvar")
+            return 0
+        print(
+            f"\nHistórico mensal ({args.arquivo}: {coverage.first_day} a {coverage.last_day}, {coverage.rows} linhas)\n"
+        )
+        print("\n".join(render_history(store.monthly())))
+    return 0
+
+
 def run_check(args: argparse.Namespace) -> int:
     config = load_accounts(args.config)
     sts = profile_session(config.hub_profile).client("sts", region_name=BILLING_REGION)
@@ -312,6 +364,8 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
             return run_check(args)
         if args.command == "recomendacoes":
             return run_recommendations(args)
+        if args.command == "historico":
+            return run_history(args, today or utc_today())
         if args.command == "orcamentos":
             return run_budgets(args, today or utc_today())
         if args.command == "tags":
