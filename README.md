@@ -1,5 +1,7 @@
 # FinOps AWS: monitoramento de custos multi-conta
 
+[![testes](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml/badge.svg)](https://github.com/pabloaugustoti/finops-aws/actions/workflows/testes.yml)
+
 Projeto pessoal de estudo para aprender **FinOps na AWS** na prática. A ideia é construir, passo a passo, uma aplicação que:
 
 - reúne os custos de **várias contas AWS** num só lugar, usando APIs e roles somente leitura;
@@ -53,7 +55,14 @@ flowchart LR
   - [x] Snapshots antigos e órfãos
   - [x] Instâncias paradas, ociosas ou maiores do que precisam
   - [x] Recursos sem tags de alocação de custo
-- [ ] **Fase 6: Avançado**: CUR 2.0 + Athena, detecção de anomalias, alertas
+- [x] **Fase 6: Anomalias e relatórios**
+  - [x] Detecção de anomalias (mediana + MAD por conta e serviço), no dashboard e na CLI
+  - [x] Relatório semanal em Markdown (custos, anomalias, economia)
+  - [x] CI no GitHub Actions (testes em Python 3.12 e 3.14 + teste de fumaça da CLI)
+- [ ] **Próximos passos**
+  - [ ] CUR 2.0 + Athena para custo por recurso (bloqueado nesta conta pela SCP em us-east-1)
+  - [ ] Envio automático do relatório (SNS/e-mail ou GitHub Actions com OIDC)
+  - [ ] Comparar com o AWS Cost Anomaly Detection
 
 ## Como rodar
 
@@ -79,6 +88,10 @@ python -m venv .venv
 # Recomendações de economia (exemplo, ou --fonte contas para as contas reais)
 .\.venv\Scripts\python.exe -m finops recomendacoes
 .\.venv\Scripts\python.exe -m finops recomendacoes --fonte contas --regioes us-east-2
+
+# Anomalias de custo e relatório semanal
+.\.venv\Scripts\python.exe -m finops anomalias
+.\.venv\Scripts\python.exe -m finops relatorio --saida data/exports/relatorio.md
 
 # Exportar custos diários por conta e serviço
 .\.venv\Scripts\python.exe -m finops resumo --csv data/exports/custos.csv
@@ -136,6 +149,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [04: Várias contas com AssumeRole](docs/diario/04-multi-conta-assume-role.md)
 - [05: Dashboard em Streamlit](docs/diario/05-dashboard-streamlit.md)
 - [06: Motor de recomendações](docs/diario/06-motor-de-recomendacoes.md)
+- [07: Anomalias, relatório semanal e CI](docs/diario/07-anomalias-relatorio-ci.md)
 
 ## Estrutura
 
@@ -152,6 +166,8 @@ finops-aws/
 │   ├── cost_explorer.py   # acesso à API, paginação e cache
 │   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
 │   ├── sample_client.py   # cliente falso com dados de exemplo realistas
+│   ├── anomalies.py       # detecção de anomalias (mediana + MAD)
+│   ├── weekly_report.py   # relatório semanal em Markdown
 │   ├── inventory.py       # inventário EC2/EBS/snapshots/IPs em todas as regiões
 │   ├── pricing.py         # tabela de preços de referência
 │   ├── recommendations.py # regras de desperdício e economia estimada
