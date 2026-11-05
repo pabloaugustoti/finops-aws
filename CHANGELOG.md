@@ -2,6 +2,14 @@
 
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/); versões seguem [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.1.0] - 2026-11-04
+
+### Adicionado
+- Template CloudFormation do provedor OIDC do GitHub + role `FinOpsGitHubReport` (somente leitura, restrita a este repositório e à branch `main`).
+- Workflow "relatório semanal" (segundas, 08:00 BRT) com credenciais via OIDC; fica inativo até existir a variável `AWS_ROLE_ARN`.
+- Perfil especial `ambiente`: usa as credenciais do ambiente (`AWS_*`), como as da CI.
+- Scripts para o Agendador do Windows: `scripts/relatorio-semanal.ps1` e `scripts/agendar-relatorio.ps1`.
+
 ## [1.0.0] - 2026-11-04
 
 ### Adicionado
@@ -67,6 +75,7 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/); 
 ### Adicionado
 - Estrutura do projeto, conta AWS, budget, Cost Explorer e acesso pelo CLI com `aws login`.
 
+[1.1.0]: https://github.com/pabloaugustoti/finops-aws/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/pabloaugustoti/finops-aws/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/pabloaugustoti/finops-aws/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pabloaugustoti/finops-aws/compare/v0.6.0...v0.7.0

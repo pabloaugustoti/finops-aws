@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finops-aws"
-version = "1.0.0"
+version = "1.1.0"
 description = "Monitoramento de custos AWS multi-conta: custos, anomalias e recomendações de economia."
 readme = "README.md"
 license = "MIT"

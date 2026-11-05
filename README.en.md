@@ -84,6 +84,13 @@ All accept `--fonte exemplo` (default, no AWS), `--fonte aws --perfil <profile>`
 3. Copy [`accounts.example.toml`](accounts.example.toml) to `accounts.local.toml` (git-ignored) and list your accounts.
 4. Check with `python -m finops verificar-contas`, then run `python -m finops web` and pick **Várias contas**.
 
+## Automated weekly report
+
+Two options, neither stores access keys:
+
+- **GitHub Actions + OIDC**: every Monday the workflow exchanges a GitHub OIDC token for temporary credentials of a read-only role that only **this repository's `main` branch** can assume ([template](infra/cloudformation/github-oidc-report-role.yaml), [workflow](.github/workflows/relatorio-semanal.yml)). The job is skipped until the `AWS_ROLE_ARN` variable is set. *Not active in my lab account: its Free-plan organization SCP denies OIDC providers.*
+- **Windows Task Scheduler**: [`scripts/agendar-relatorio.ps1`](scripts/agendar-relatorio.ps1) runs the report every Monday using `aws login` and the `FinOpsReadOnly` role.
+
 ## Code quality
 
 ruff (lint, including security rules, and formatting), mypy, 80 tests with 92% coverage (90% minimum enforced) that never touch AWS, pre-commit hooks, and GitHub Actions running everything on Python 3.12 and 3.14 for every PR.

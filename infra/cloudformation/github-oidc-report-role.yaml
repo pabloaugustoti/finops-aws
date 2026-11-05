@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Permite que o GitHub Actions deste repositório gere o relatório semanal de
+  FinOps SEM chaves de acesso: o workflow troca um token OIDC do GitHub por
+  credenciais temporárias de uma role somente leitura.
+
+  Observação: contas do Free plan da "nova experiência" da AWS bloqueiam
+  provedores OIDC por SCP. Use este template em uma conta sem essa restrição.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: pabloaugustoti/finops-aws
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: Repositório (dono/nome) autorizado a assumir a role.
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: Só workflows rodando nesta branch podem assumir a role.
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >
+      "false" se a conta já tiver o provedor token.actions.githubusercontent.com
+      (só pode existir um por conta).
+  RoleName:
+    Type: String
+    Default: FinOpsGitHubReport
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # A AWS valida o GitHub pela cadeia de certificados confiável; as impressões
+      # digitais ficam por compatibilidade.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Project
+          Value: finops-aws
+
+  ReportRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Relatório semanal de FinOps pelo GitHub Actions (OIDC, somente leitura).
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                # o token precisa ter sido emitido para a AWS...
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # ...e vir DESTE repositório, rodando NESTA branch (forks e PRs ficam de fora)
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: finops-report-read-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CustosEPrevisao
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostForecast
+                Resource: "*"
+              - Sid: InventarioParaRecomendacoes
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeRegions
+                  - cloudwatch:GetMetricData
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: finops-aws
+
+Outputs:
+  RoleArn:
+    Description: Coloque este valor na variável AWS_ROLE_ARN do repositório (Settings > Variables).
+    Value: !GetAtt ReportRole.Arn

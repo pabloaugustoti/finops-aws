@@ -113,6 +113,30 @@ Todos aceitam `--fonte exemplo` (padrão, sem AWS), `--fonte aws --perfil <perfi
 
 O passo a passo de criação da conta AWS está em [docs/checklist-conta-aws.md](docs/checklist-conta-aws.md).
 
+## Relatório semanal automático
+
+Há dois jeitos, e nenhum guarda chave de acesso:
+
+| | GitHub Actions + OIDC | Agendador do Windows |
+|---|---|---|
+| Onde roda | Nuvem do GitHub, toda segunda às 08:00 | No seu PC, toda segunda às 08:00 |
+| Credencial | Token OIDC do GitHub trocado por credenciais temporárias de uma role restrita a **este repositório e à branch `main`** | O seu `aws login` + a role `FinOpsReadOnly` |
+| Resultado | Resumo da execução no Actions + artefato por 90 dias | `data/exports/relatorios/relatorio-AAAA-MM-DD.md` |
+| Arquivos | [`github-oidc-report-role.yaml`](infra/cloudformation/github-oidc-report-role.yaml), [`relatorio-semanal.yml`](.github/workflows/relatorio-semanal.yml) | [`relatorio-semanal.ps1`](scripts/relatorio-semanal.ps1), [`agendar-relatorio.ps1`](scripts/agendar-relatorio.ps1) |
+
+**Ativar o OIDC** (em uma conta AWS sem a restrição de SCP descrita no [diário 11](docs/diario/11-relatorio-semanal-oidc.md)):
+
+```powershell
+aws cloudformation deploy --template-file infra/cloudformation/github-oidc-report-role.yaml `
+  --stack-name finops-github-oidc --capabilities CAPABILITY_NAMED_IAM --profile <perfil>
+gh variable set AWS_ROLE_ARN --body "<RoleArn da saída da stack>"
+gh workflow run "relatório semanal"
+```
+
+Enquanto `AWS_ROLE_ARN` não existir, o workflow é pulado (não falha).
+
+**Ativar no Windows:** `.\scripts\agendar-relatorio.ps1` (para remover: `-Remover`).
+
 ## Segurança
 
 - **Nenhuma credencial no repositório**: perfis do AWS CLI com credenciais temporárias; o pre-commit bloqueia chaves privadas e credenciais AWS.
@@ -184,12 +208,13 @@ Cada etapa virou um PR e uma entrada no diário, com o que foi feito, as decisõ
 | v0.7 | Interface web feita à mão | [08](docs/diario/08-interface-web-feita-a-mao.md) |
 | v0.8 | Qualidade de código | [09](docs/diario/09-qualidade-de-codigo.md) |
 | v1.0 | README de portfólio, licença e releases | [10](docs/diario/10-readme-de-portfolio.md) |
+| v1.1 | Relatório semanal automático (OIDC + agendador local) | [11](docs/diario/11-relatorio-semanal-oidc.md) |
 
 O histórico completo de mudanças está no [CHANGELOG](CHANGELOG.md).
 
 ## Próximos passos
 
-- [ ] Relatório semanal automático pelo GitHub Actions com **OIDC** (sem chaves guardadas)
+- [ ] Ativar o relatório por **OIDC** numa conta sem a SCP do Free plan (código e infraestrutura já prontos)
 - [ ] Histórico de custos em **SQLite**, para tendências de meses sem pagar a API de novo
 - [ ] Custo por **tag** (showback por projeto e ambiente)
 - [ ] Cobertura de **Savings Plans e Reserved Instances**

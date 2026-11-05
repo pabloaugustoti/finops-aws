@@ -1,0 +1,47 @@
+name: relatório semanal
+
+# Toda segunda-feira às 11:00 UTC (08:00 em Brasília), ou manualmente pela aba Actions.
+on:
+  schedule:
+    - cron: "0 11 * * 1"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # pedir o token OIDC que a AWS troca por credenciais temporárias
+  contents: read
+
+jobs:
+  relatorio:
+    runs-on: ubuntu-latest
+    # Inativo até configurar a variável AWS_ROLE_ARN (Settings > Secrets and variables > Actions > Variables).
+    # Sem ela o job é pulado em vez de falhar toda semana.
+    if: vars.AWS_ROLE_ARN != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Instalar
+        run: python -m pip install -e .
+
+      - name: Credenciais temporárias via OIDC (sem chaves guardadas)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: finops-relatorio-semanal
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Gerar relatório
+        run: |
+          python -m finops relatorio --fonte aws --perfil ambiente \
+            ${{ vars.FINOPS_REGIOES && format('--regioes {0}', vars.FINOPS_REGIOES) || '' }} \
+            --saida relatorio.md
+          cat relatorio.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar o relatório (artefato por 90 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-semanal-${{ github.run_number }}
+          path: relatorio.md
+          retention-days: 90
