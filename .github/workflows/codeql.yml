@@ -1,0 +1,33 @@
+name: codeql
+
+# Análise de segurança do código (Python e JavaScript).
+# O code scanning é gratuito só em repositórios PÚBLICOS: enquanto o repositório for
+# privado, o job é pulado em vez de falhar.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 9 * * 3"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analisar:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
