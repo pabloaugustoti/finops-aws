@@ -25,8 +25,15 @@ from finops.dashboard.data import (
     service_order,
     totals_by,
 )
+from finops.recommendations import analyze, savings_by_rule, total_savings
 from finops.report import fmt_usd
-from finops.sources import DEFAULT_ACCOUNTS_FILE, build_source, run_collection
+from finops.sources import (
+    DEFAULT_ACCOUNTS_FILE,
+    build_inventory_source,
+    build_source,
+    run_collection,
+    run_inventory,
+)
 
 # A coleta sempre busca 90 dias; mudar o período no filtro não gera novas chamadas pagas.
 FETCH_DAYS = 90
@@ -123,14 +130,15 @@ def daily_chart(daily: pd.DataFrame, order: list[str], colors: dict) -> alt.Char
     return style(chart, colors, 340)
 
 
-def ranking_chart(table: pd.DataFrame, column: str, title: str, colors: dict) -> alt.Chart:
+def ranking_chart(table: pd.DataFrame, column: str, title: str, colors: dict,
+                  x_title: str = "US$ no período") -> alt.Chart:
     data = with_money(table).assign(pct=table["participacao"].map(lambda p: f"{p * 100:.1f}%".replace(".", ",")))
     # 35% de folga à direita para o rótulo de valor caber ao lado da barra
     domain_max = float(data["custo"].max()) * 1.35 if len(data) else 1.0
     base = alt.Chart(data).encode(
         y=alt.Y(f"{column}:N", sort="-x", title=None, axis=alt.Axis(labelLimit=260)),
         x=alt.X("custo:Q", scale=alt.Scale(domain=[0, domain_max], nice=False),
-                axis=alt.Axis(title="US$ no período", tickCount=4, labelExpr=PT_NUMBER)),
+                axis=alt.Axis(title=x_title, tickCount=4, labelExpr=PT_NUMBER)),
         tooltip=[alt.Tooltip(f"{column}:N", title=title), alt.Tooltip("valor:N", title="Custo"),
                  alt.Tooltip("pct:N", title="Participação")],
     )
@@ -174,8 +182,86 @@ def sidebar() -> tuple[str, str, str, int]:
                            "Respostas repetidas vêm do cache em `data/cache/`.")
     if st.sidebar.button("Recarregar dados", use_container_width=True):
         load.clear()
+        load_recommendations.clear()
     days = st.sidebar.select_slider("Período (dias)", options=PERIOD_OPTIONS, value=30)
     return kind, profile, config, days
+
+
+@st.cache_data(ttl=3600, show_spinner="Coletando inventário em todas as regiões...")
+def load_recommendations(kind: str, profile: str, config_path: str, hour_key: str) -> dict:
+    source = build_inventory_source(kind, profile=profile, config_path=Path(config_path))
+    inventories = run_inventory(source)
+    recs = analyze(inventories, datetime.now(timezone.utc))
+    return {
+        "label": source.label,
+        "recs": recs,
+        "resources": sum(i.resource_count for i in inventories),
+        "regions": sorted({r for i in inventories for r in i.regions}),
+        "errors": [f"{i.account}: {e}" for i in inventories for e in i.errors],
+        "blocked": {i.account: i.blocked_regions for i in inventories if i.blocked_regions},
+    }
+
+
+SEVERITY_BADGE = {"alta": "🔴 Alta", "media": "🟠 Média", "baixa": "⚪ Baixa"}
+
+
+def recommendations_tab(kind: str, profile: str, config: str, colors: dict) -> None:
+    hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    try:
+        data = load_recommendations(kind, profile, config, hour_key)
+    except Exception as error:  # noqa: BLE001
+        st.error(f"Não foi possível coletar o inventário: {str(error).splitlines()[0]}")
+        return
+
+    recs = data["recs"]
+    saving_recs = [r for r in recs if r.monthly_savings is not None]
+    governance = [r for r in recs if r.monthly_savings is None]
+    total = total_savings(recs)
+    st.caption(f"Fonte: {data['label']} · {data['resources']} recurso(s) em {len(data['regions'])} região(ões) · "
+               "economia estimada com preços sob demanda de us-east-1 (sem custo de API: chamadas Describe são gratuitas)")
+    for message in data["errors"]:
+        st.warning(f"Problema na coleta: {message}", icon="⚠️")
+    for account, blocked in data["blocked"].items():
+        st.info(f"**{account}**: {len(blocked)} região(ões) bloqueadas por SCP da organização foram ignoradas "
+                f"({', '.join(blocked)}).", icon="ℹ️")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Economia potencial / mês", fmt_usd(total))
+    c2.metric("Economia potencial / ano", fmt_usd(total * 12))
+    c3.metric("Oportunidades de economia", str(len(saving_recs)))
+    c4.metric("Recursos sem tags", str(len(governance)), help="Sem as tags Project e Environment")
+
+    if not recs:
+        st.success("Nenhum desperdício encontrado no inventário. Use **Dados de exemplo** para ver as regras em ação.")
+        return
+
+    if saving_recs:
+        st.subheader("Economia por tipo de recomendação")
+        by_rule = pd.DataFrame(
+            [{"tipo": t, "custo": float(a), "quantidade": c} for t, c, a in savings_by_rule(saving_recs)]
+        )
+        by_rule["participacao"] = by_rule["custo"] / by_rule["custo"].sum()
+        st.altair_chart(ranking_chart(by_rule, "tipo", "Tipo", colors, x_title="US$ por mês"),
+                        use_container_width=True, theme=None)
+
+    st.subheader("Recomendações")
+    categories = st.segmented_control("Mostrar", ["economia", "governança"], default=["economia", "governança"],
+                                      selection_mode="multi")
+    shown = [r for r in recs if r.category in (categories or [])]
+    table = pd.DataFrame([{
+        "Severidade": SEVERITY_BADGE[r.severity],
+        "Economia/mês (US$)": float(r.monthly_savings) if r.monthly_savings is not None else None,
+        "Conta": r.account, "Região": r.region, "Recurso": r.resource_id,
+        "Recomendação": r.title, "Detalhe": r.detail, "Ação sugerida": r.action,
+    } for r in shown])
+    st.dataframe(table, use_container_width=True, hide_index=True, column_config={
+        "Economia/mês (US$)": st.column_config.NumberColumn(format="%.2f"),
+        "Detalhe": st.column_config.TextColumn(width="large"),
+        "Ação sugerida": st.column_config.TextColumn(width="large"),
+    })
+    if not table.empty:
+        st.download_button("Baixar CSV", table.to_csv(index=False).encode("utf-8"),
+                           file_name="recomendacoes.csv", mime="text/csv")
 
 
 def main() -> None:
@@ -185,6 +271,14 @@ def main() -> None:
     today = utc_today()
 
     st.title("FinOps AWS")
+    costs, recommendations = st.tabs(["📊 Custos", "💡 Recomendações"])
+    with recommendations:
+        recommendations_tab(kind, profile, config, colors)
+    with costs:
+        costs_tab(kind, profile, config, days, colors, today)
+
+
+def costs_tab(kind: str, profile: str, config: str, days: int, colors: dict, today: date) -> None:
     try:
         data = load(kind, profile, config, today.isoformat())
     except ConfigError as error:

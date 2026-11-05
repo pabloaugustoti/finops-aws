@@ -1,20 +1,26 @@
-"""Fontes de dados de custo, compartilhadas pela CLI e pelo dashboard."""
+"""Fontes de dados (custos e inventário), compartilhadas pela CLI e pelo dashboard."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from finops.accounts import load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
 from finops.collector import ClientFactory, CollectionResult, collect
+from finops.inventory import Inventory, collect_inventory
 from finops.sample_client import SAMPLE_ACCOUNTS, SampleCostExplorerClient
+from finops.sample_inventory import sample_inventory
 
 SOURCE_KINDS = ("exemplo", "aws", "contas")
 DEFAULT_CACHE_DIR = Path("data/cache")
 DEFAULT_ACCOUNTS_FILE = Path("accounts.local.toml")
+
+SessionFactory = Callable[[str], Any]
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,19 @@ def collection_window(today: date, days: int) -> Window:
     return Window(start=min(today - timedelta(days=days), month_start), end=today, forecast_end=next_month)
 
 
+def _aws_sessions(kind: str, profile: str, config_path: Path) -> tuple[list[str], SessionFactory, str]:
+    """Contas e uma fábrica de sessões boto3 para as fontes reais."""
+    if kind == "aws":
+        return [profile], (lambda _: profile_session(profile)), f"AWS, perfil {profile}"
+    if kind == "contas":
+        config = load_accounts(config_path)
+        by_name = {a.name: a for a in config.accounts}
+        sts = profile_session(config.hub_profile).client("sts", region_name=BILLING_REGION)
+        label = f"AWS, {len(by_name)} conta(s) via AssumeRole a partir do perfil {config.hub_profile}"
+        return list(by_name), (lambda name: assume_role_session(sts, by_name[name])), label
+    raise ValueError(f"fonte desconhecida: {kind} (use {', '.join(SOURCE_KINDS)})")
+
+
 def build_source(
     kind: str,
     today: date,
@@ -52,24 +71,8 @@ def build_source(
 
         return Source(list(SAMPLE_ACCOUNTS), sample_factory, "dados de exemplo", paid=False)
 
-    if kind == "aws":
-        def profile_factory(_: str):
-            return profile_session(profile).client("ce", region_name=BILLING_REGION)
-
-        return Source([profile], profile_factory, f"AWS, perfil {profile}", paid=True)
-
-    if kind == "contas":
-        config = load_accounts(config_path)
-        by_name = {a.name: a for a in config.accounts}
-        sts = profile_session(config.hub_profile).client("sts")
-
-        def assume_factory(name: str):
-            return assume_role_session(sts, by_name[name]).client("ce", region_name=BILLING_REGION)
-
-        label = f"AWS, {len(by_name)} conta(s) via AssumeRole a partir do perfil {config.hub_profile}"
-        return Source(list(by_name), assume_factory, label, paid=True)
-
-    raise ValueError(f"fonte desconhecida: {kind} (use {', '.join(SOURCE_KINDS)})")
+    names, sessions, label = _aws_sessions(kind, profile, config_path)
+    return Source(names, lambda name: sessions(name).client("ce", region_name=BILLING_REGION), label, paid=True)
 
 
 def run_collection(
@@ -81,3 +84,37 @@ def run_collection(
         source.names, source.factory,
         start=window.start, end=window.end, forecast_end=window.forecast_end, cache=cache,
     )
+
+
+@dataclass(frozen=True)
+class InventorySource:
+    names: list[str]
+    loader: Callable[[str], Inventory]
+    label: str
+
+
+def build_inventory_source(
+    kind: str,
+    *,
+    profile: str = "finops-lab",
+    config_path: Path = DEFAULT_ACCOUNTS_FILE,
+    regions: list[str] | None = None,
+    now: datetime | None = None,
+) -> InventorySource:
+    if kind == "exemplo":
+        moment = now or datetime.now(timezone.utc)
+        return InventorySource(list(SAMPLE_ACCOUNTS), lambda name: sample_inventory(name, moment), "dados de exemplo")
+
+    names, sessions, label = _aws_sessions(kind, profile, config_path)
+    return InventorySource(names, lambda name: collect_inventory(sessions(name), name, regions), label)
+
+
+def run_inventory(source: InventorySource) -> list[Inventory]:
+    """Inventário de cada conta; uma conta com erro vira um inventário vazio com o erro anotado."""
+    inventories = []
+    for name in source.names:
+        try:
+            inventories.append(source.loader(name))
+        except Exception as error:  # noqa: BLE001
+            inventories.append(Inventory(account=name, errors=[str(error).splitlines()[0]]))
+    return inventories
