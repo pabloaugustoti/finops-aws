@@ -89,7 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
 
-    dashboard = commands.add_parser("dashboard", help="abre o dashboard no navegador (Streamlit)")
+    web = commands.add_parser("web", help="abre a interface web própria (HTML/CSS/JS) em 127.0.0.1")
+    web.add_argument("--porta", type=int, default=8000)
+    web.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    web.add_argument("--sem-navegador", action="store_true", help="não abre o navegador automaticamente")
+
+    dashboard = commands.add_parser("dashboard", help="abre o dashboard antigo em Streamlit")
     dashboard.add_argument("--porta", type=int, default=8501)
 
     clear = commands.add_parser("limpar-cache", help="apaga as respostas da AWS guardadas em cache")
@@ -226,6 +231,11 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
         return 0
     if args.command == "dashboard":
         return run_dashboard(args)
+    if args.command == "web":
+        from finops.web.server import serve
+
+        serve(port=args.porta, config_path=args.config, open_browser=not args.sem_navegador)
+        return 0
 
     from botocore.exceptions import BotoCoreError, ClientError
 

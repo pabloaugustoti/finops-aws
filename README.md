@@ -59,6 +59,10 @@ flowchart LR
   - [x] Detecção de anomalias (mediana + MAD por conta e serviço), no dashboard e na CLI
   - [x] Relatório semanal em Markdown (custos, anomalias, economia)
   - [x] CI no GitHub Actions (testes em Python 3.12 e 3.14 + teste de fumaça da CLI)
+- [x] **Fase 7: Interface web feita à mão**
+  - [x] Servidor HTTP local só com a biblioteca padrão do Python (`127.0.0.1`, somente GET, CSP `'self'`)
+  - [x] API JSON (`/api/custos`, `/api/recomendacoes`, `/api/relatorio`)
+  - [x] Frontend em HTML, CSS e JavaScript puros, com gráficos SVG desenhados à mão e tema claro/escuro
 - [ ] **Próximos passos**
   - [ ] CUR 2.0 + Athena para custo por recurso (bloqueado nesta conta pela SCP em us-east-1)
   - [ ] Envio automático do relatório (SNS/e-mail ou GitHub Actions com OIDC)
@@ -72,8 +76,8 @@ Requisitos: Python 3.12+ e, para dados reais, o AWS CLI v2 logado (`aws login --
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 
-# Dashboard no navegador (http://localhost:8501)
-.\.venv\Scripts\python.exe -m finops dashboard
+# Interface web própria (HTML/CSS/JS feitos à mão) em http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m finops web
 
 # Resumo com dados de exemplo (não acessa a AWS, custo zero)
 .\.venv\Scripts\python.exe -m finops resumo
@@ -150,6 +154,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [05: Dashboard em Streamlit](docs/diario/05-dashboard-streamlit.md)
 - [06: Motor de recomendações](docs/diario/06-motor-de-recomendacoes.md)
 - [07: Anomalias, relatório semanal e CI](docs/diario/07-anomalias-relatorio-ci.md)
+- [08: Interface web feita à mão](docs/diario/08-interface-web-feita-a-mao.md)
 
 ## Estrutura
 
@@ -173,7 +178,8 @@ finops-aws/
 │   ├── recommendations.py # regras de desperdício e economia estimada
 │   ├── report.py          # resumo, formatação e exportação CSV
 │   ├── sources.py         # fontes de dados (exemplo, perfil, várias contas)
-│   ├── dashboard/         # app Streamlit + preparação de dados (pandas)
+│   ├── web/               # interface própria: server.py (http.server), api.py e static/ (HTML/CSS/JS)
+│   ├── dashboard/         # versão anterior em Streamlit
 │   └── cli.py             # linha de comando (python -m finops)
 ├── tests/                 # pytest + botocore Stubber (sem acessar a AWS)
 ├── data/                  # cache e exportações (ignorado pelo Git)

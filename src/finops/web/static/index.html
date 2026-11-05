@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FinOps AWS</title>
+  <meta name="description" content="Custos, anomalias e oportunidades de economia das suas contas AWS.">
+  <link rel="icon" href="/static/icone.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#conteudo">Pular para o conteúdo</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand__logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="3" y="17" width="6" height="12" rx="2"></rect>
+        <rect x="13" y="10" width="6" height="19" rx="2"></rect>
+        <rect x="23" y="3" width="6" height="26" rx="2"></rect>
+      </svg>
+      <div>
+        <h1 class="brand__title">FinOps AWS</h1>
+        <p class="brand__subtitle">custos, anomalias e economia</p>
+      </div>
+    </div>
+
+    <nav class="tabs" role="tablist" aria-label="Seções">
+      <button class="tabs__tab" role="tab" id="aba-custos" aria-controls="painel-custos" aria-selected="true">Custos</button>
+      <button class="tabs__tab" role="tab" id="aba-recs" aria-controls="painel-recs" aria-selected="false" tabindex="-1">Recomendações</button>
+    </nav>
+
+    <div class="topbar__actions">
+      <a class="button button--ghost" id="baixar-relatorio" href="/api/relatorio" download>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4-4-4M4 16h12"/></svg>
+        Relatório semanal
+      </a>
+      <button class="button button--icon" id="alternar-tema" type="button" aria-label="Tema: automático">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M10 4a6 6 0 0 1 0 12z" class="fill"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="filters" aria-label="Filtros">
+    <label class="field">
+      <span class="field__label">Fonte</span>
+      <select id="filtro-fonte">
+        <option value="exemplo">Dados de exemplo (3 contas)</option>
+        <option value="aws">Minha conta (perfil do CLI)</option>
+        <option value="contas">Várias contas (AssumeRole)</option>
+      </select>
+    </label>
+    <label class="field" id="campo-perfil" hidden>
+      <span class="field__label">Perfil</span>
+      <input id="filtro-perfil" value="finops-lab" spellcheck="false" autocomplete="off">
+    </label>
+    <fieldset class="field" id="campo-periodo">
+      <legend class="field__label">Período</legend>
+      <div class="segmented" id="filtro-periodo">
+        <button type="button" data-dias="7">7d</button>
+        <button type="button" data-dias="14">14d</button>
+        <button type="button" data-dias="30" aria-pressed="true">30d</button>
+        <button type="button" data-dias="60">60d</button>
+        <button type="button" data-dias="90">90d</button>
+      </div>
+    </fieldset>
+    <fieldset class="field field--grow" id="campo-contas" hidden>
+      <legend class="field__label">Contas</legend>
+      <div class="chips" id="filtro-contas"></div>
+    </fieldset>
+    <button class="button" id="recarregar" type="button">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v4h-4"/></svg>
+      Recarregar
+    </button>
+  </section>
+
+  <main id="conteudo">
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+
+    <section id="painel-custos" role="tabpanel" aria-labelledby="aba-custos">
+      <p class="meta" id="custos-meta"></p>
+      <div id="custos-avisos"></div>
+      <div class="kpis" id="custos-kpis"></div>
+
+      <article class="card">
+        <header class="card__header">
+          <h2>Custo diário por serviço</h2>
+          <p class="card__hint">Passe o mouse sobre um dia para ver o detalhe · ⚠ marca anomalias</p>
+        </header>
+        <ul class="legend" id="legenda-diario"></ul>
+        <div class="chart" id="grafico-diario"></div>
+      </article>
+
+      <div id="anomalias"></div>
+
+      <div class="grid-2">
+        <article class="card">
+          <header class="card__header"><h2>Por conta</h2></header>
+          <div class="hbars" id="barras-conta"></div>
+        </article>
+        <article class="card">
+          <header class="card__header"><h2>Top 10 serviços</h2></header>
+          <div class="hbars" id="barras-servico"></div>
+        </article>
+      </div>
+
+      <article class="card">
+        <header class="card__header">
+          <h2>Mês atual: acumulado e previsão</h2>
+          <p class="card__hint">Linha cheia: gasto real · tracejada: previsão do Cost Explorer até o fim do mês</p>
+        </header>
+        <div class="chart" id="grafico-mes"></div>
+      </article>
+
+      <details class="card card--table">
+        <summary><h2>Tabela detalhada</h2><span class="card__hint" id="linhas-total"></span></summary>
+        <div class="table-actions"><button class="button button--ghost" id="csv-custos" type="button">Baixar CSV</button></div>
+        <div class="table-wrap"><table id="tabela-custos"></table></div>
+      </details>
+    </section>
+
+    <section id="painel-recs" role="tabpanel" aria-labelledby="aba-recs" hidden>
+      <p class="meta" id="recs-meta"></p>
+      <div id="recs-avisos"></div>
+      <div class="kpis" id="recs-kpis"></div>
+
+      <article class="card" id="card-por-tipo">
+        <header class="card__header"><h2>Economia por tipo de recomendação</h2></header>
+        <div class="hbars" id="barras-tipo"></div>
+      </article>
+
+      <article class="card card--table">
+        <header class="card__header card__header--row">
+          <h2>Recomendações</h2>
+          <div class="table-filters">
+            <div class="segmented" id="filtro-categoria">
+              <button type="button" data-cat="todas" aria-pressed="true">Todas</button>
+              <button type="button" data-cat="economia">Economia</button>
+              <button type="button" data-cat="governança">Governança</button>
+            </div>
+            <input type="search" id="busca-recs" placeholder="Buscar recurso, conta, regra…" aria-label="Buscar nas recomendações">
+            <button class="button button--ghost" id="csv-recs" type="button">Baixar CSV</button>
+          </div>
+        </header>
+        <div class="table-wrap"><table id="tabela-recs"></table></div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Rodando localmente em <code>127.0.0.1</code> · os dados não saem deste computador · sem bibliotecas externas
+  </footer>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+</body>
+</html>
