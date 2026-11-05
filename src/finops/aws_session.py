@@ -11,9 +11,18 @@ SESSION_NAME = "finops-coletor"
 
 
 def profile_session(profile: str):
+    """Sessão do perfil do AWS CLI.
+
+    Se o perfil não tiver região padrão, usamos us-east-1: a renovação automática das
+    credenciais do `aws login` precisa de uma região, e sem ela tudo falha com
+    "You must specify a region" depois que o primeiro token expira.
+    """
     import boto3
 
-    return boto3.Session(profile_name=profile)
+    session = boto3.Session(profile_name=profile)
+    if session.region_name is None:
+        session = boto3.Session(profile_name=profile, region_name=BILLING_REGION)
+    return session
 
 
 def assume_role_session(sts_client: Any, account: Account, duration_seconds: int = 3600):

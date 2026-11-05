@@ -137,6 +137,74 @@ def render_text(
     return "\n".join(lines)
 
 
+SEVERITY_LABEL = {"alta": "ALTA ", "media": "MÉDIA", "baixa": "BAIXA"}
+
+
+def render_recommendations(recs: list, *, source: str, inventories: list, detail_limit: int = 30) -> str:
+    """Relatório de texto das recomendações (lista já ordenada por economia)."""
+    from finops.recommendations import savings_by_rule, total_savings
+
+    savings = [r for r in recs if r.monthly_savings is not None]
+    governance = [r for r in recs if r.monthly_savings is None]
+    total = total_savings(recs)
+    resources = sum(i.resource_count for i in inventories)
+    regions = sorted({r for i in inventories for r in i.regions})
+
+    lines = [
+        f"FinOps AWS: recomendações (fonte: {source})",
+        f"Inventário: {resources} recurso(s) em {len(inventories)} conta(s) e {len(regions)} região(ões)",
+        "",
+        f"  Economia potencial ...... {fmt_usd(total)}/mês ({fmt_usd(total * 12)}/ano)",
+        f"  Oportunidades ........... {len(savings)} de economia + {len(governance)} de governança (tags)",
+    ]
+    if savings:
+        lines += ["", "Por tipo:"]
+        width = max(len(t) for t, _, _ in savings_by_rule(savings))
+        for title, count, amount in savings_by_rule(savings):
+            lines.append(f"  {title:<{width}}  {count:>3}x  {fmt_usd(amount):>14}/mês")
+
+        lines += ["", "Maiores economias:"]
+        for r in savings[:detail_limit]:
+            lines.append(f"  [{SEVERITY_LABEL[r.severity]}] {fmt_usd(r.monthly_savings):>12}/mês  "
+                         f"{r.account} · {r.region} · {r.resource_id}")
+            lines.append(f"           {r.title}: {r.detail}")
+            lines.append(f"           → {r.action}")
+        if len(savings) > detail_limit:
+            lines.append(f"  ... e mais {len(savings) - detail_limit} (use --csv para ver todas)")
+    elif not governance:
+        lines += ["", "Nenhum desperdício encontrado. 🎉"]
+
+    if governance:
+        lines += ["", f"Governança: {len(governance)} recurso(s) sem as tags Project/Environment"]
+        for r in governance[:5]:
+            lines.append(f"  - {r.account} · {r.region} · {r.resource_id}: {r.detail}")
+        if len(governance) > 5:
+            lines.append(f"  ... e mais {len(governance) - 5}")
+
+    for inv in inventories:
+        if inv.blocked_regions:
+            lines += ["", f"ℹ {inv.account}: {len(inv.blocked_regions)} região(ões) bloqueadas por SCP da organização "
+                          f"(ignoradas): {', '.join(inv.blocked_regions)}"]
+    errors = [f"{i.account}: {e}" for i in inventories for e in i.errors]
+    if errors:
+        lines += ["", "⚠ Problemas na coleta:"] + [f"  - {e}" for e in errors]
+    return "\n".join(lines)
+
+
+def export_recommendations_csv(recs: list, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["severidade", "economia_mensal_usd", "regra", "titulo", "conta", "regiao",
+                         "recurso", "detalhe", "acao"])
+        for r in recs:
+            writer.writerow([r.severity, "" if r.monthly_savings is None else str(r.monthly_savings.quantize(ZERO_CENTS)),
+                             r.rule, r.title, r.account, r.region, r.resource_id, r.detail, r.action])
+
+
+ZERO_CENTS = Decimal("0.01")
+
+
 def export_csv(records: list[CostRecord], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:

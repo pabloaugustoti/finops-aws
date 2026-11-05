@@ -12,13 +12,23 @@ from finops.accounts import ConfigError, load_accounts
 from finops.aws_session import BILLING_REGION, assume_role_session, profile_session
 from finops.cache import JsonCache
 from finops.cost_explorer import PRICE_PER_REQUEST_USD
-from finops.report import build_summary, export_csv, fmt_usd, render_text
+from finops.recommendations import analyze
+from finops.report import (
+    build_summary,
+    export_csv,
+    export_recommendations_csv,
+    fmt_usd,
+    render_recommendations,
+    render_text,
+)
 from finops.sources import (
     DEFAULT_ACCOUNTS_FILE,
     DEFAULT_CACHE_DIR,
     SOURCE_KINDS,
+    build_inventory_source,
     build_source,
     run_collection,
+    run_inventory,
 )
 
 DASHBOARD_APP = Path(__file__).parent / "dashboard" / "app.py"
@@ -47,6 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--sem-cache", action="store_true", help="ignora o cache e consulta a API de novo")
     summary.add_argument("--csv", type=Path, help="exporta os custos diários por conta e serviço para CSV")
     summary.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help=argparse.SUPPRESS)
+
+    recs = commands.add_parser("recomendacoes", help="procura desperdício e estima a economia mensal")
+    recs.add_argument("--fonte", choices=SOURCE_KINDS, default="exemplo",
+                      help="'exemplo': inventário fictício com desperdício; 'aws'; 'contas' (padrão: exemplo)")
+    recs.add_argument("--perfil", default="finops-lab", help="perfil do AWS CLI para --fonte aws")
+    recs.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
+    recs.add_argument("--regioes", help="regiões separadas por vírgula (padrão: todas as habilitadas)")
+    recs.add_argument("--csv", type=Path, help="exporta todas as recomendações para CSV")
 
     check = commands.add_parser("verificar-contas", help="testa o AssumeRole e as permissões em cada conta")
     check.add_argument("--config", type=Path, default=DEFAULT_ACCOUNTS_FILE)
@@ -79,9 +97,23 @@ def run_summary(args: argparse.Namespace, today: date) -> int:
     return 1 if result.errors and not result.records else 0
 
 
+def run_recommendations(args: argparse.Namespace) -> int:
+    regions = [r.strip() for r in args.regioes.split(",") if r.strip()] if args.regioes else None
+    source = build_inventory_source(args.fonte, profile=args.perfil, config_path=args.config, regions=regions)
+    if args.fonte != "exemplo":
+        print("Coletando inventário (EC2, EBS, snapshots, IPs) em todas as regiões...", file=sys.stderr)
+    inventories = run_inventory(source)
+    recs = analyze(inventories, datetime.now(timezone.utc))
+    print(render_recommendations(recs, source=source.label, inventories=inventories))
+    if args.csv:
+        export_recommendations_csv(recs, args.csv)
+        print(f"\nCSV salvo em {args.csv}")
+    return 0
+
+
 def run_check(args: argparse.Namespace) -> int:
     config = load_accounts(args.config)
-    sts = profile_session(config.hub_profile).client("sts")
+    sts = profile_session(config.hub_profile).client("sts", region_name=BILLING_REGION)
     hub = sts.get_caller_identity()
     print(f"Conta hub: {hub['Account']} (perfil {config.hub_profile})\n")
 
@@ -89,7 +121,7 @@ def run_check(args: argparse.Namespace) -> int:
     for account in config.accounts:
         try:
             session = assume_role_session(sts, account)
-            identity = session.client("sts").get_caller_identity()
+            identity = session.client("sts", region_name=BILLING_REGION).get_caller_identity()
             budgets = session.client("budgets", region_name=BILLING_REGION).describe_budgets(
                 AccountId=account.account_id
             )
@@ -130,6 +162,8 @@ def main(argv: list[str] | None = None, today: date | None = None) -> int:
     try:
         if args.command == "verificar-contas":
             return run_check(args)
+        if args.command == "recomendacoes":
+            return run_recommendations(args)
         return run_summary(args, today or utc_today())
     except ConfigError as error:
         print(f"erro de configuração: {error}", file=sys.stderr)

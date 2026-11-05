@@ -47,12 +47,12 @@ flowchart LR
 - [x] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com cache e modo de dados de exemplo
 - [x] **Fase 3: Várias contas**: role `FinOpsReadOnly` em CloudFormation, arquivo de contas e `sts:AssumeRole`
 - [x] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
-- [ ] **Fase 5: Recomendações**
-  - [ ] Volumes EBS gp2 que podem virar gp3
-  - [ ] Volumes EBS sem uso e IPs elásticos ociosos
-  - [ ] Snapshots antigos
-  - [ ] Instâncias paradas, ociosas ou maiores do que precisam
-  - [ ] Recursos sem tags de alocação de custo
+- [x] **Fase 5: Recomendações** (com economia mensal estimada)
+  - [x] Volumes EBS gp2 que podem virar gp3
+  - [x] Volumes EBS sem uso e IPs elásticos ociosos
+  - [x] Snapshots antigos e órfãos
+  - [x] Instâncias paradas, ociosas ou maiores do que precisam
+  - [x] Recursos sem tags de alocação de custo
 - [ ] **Fase 6: Avançado**: CUR 2.0 + Athena, detecção de anomalias, alertas
 
 ## Como rodar
@@ -75,6 +75,10 @@ python -m venv .venv
 # Várias contas via AssumeRole (configure accounts.local.toml antes)
 .\.venv\Scripts\python.exe -m finops verificar-contas
 .\.venv\Scripts\python.exe -m finops resumo --fonte contas
+
+# Recomendações de economia (exemplo, ou --fonte contas para as contas reais)
+.\.venv\Scripts\python.exe -m finops recomendacoes
+.\.venv\Scripts\python.exe -m finops recomendacoes --fonte contas --regioes us-east-2
 
 # Exportar custos diários por conta e serviço
 .\.venv\Scripts\python.exe -m finops resumo --csv data/exports/custos.csv
@@ -131,6 +135,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [03: Coletor do Cost Explorer com cache](docs/diario/03-coletor-cost-explorer.md)
 - [04: Várias contas com AssumeRole](docs/diario/04-multi-conta-assume-role.md)
 - [05: Dashboard em Streamlit](docs/diario/05-dashboard-streamlit.md)
+- [06: Motor de recomendações](docs/diario/06-motor-de-recomendacoes.md)
 
 ## Estrutura
 
@@ -147,6 +152,9 @@ finops-aws/
 │   ├── cost_explorer.py   # acesso à API, paginação e cache
 │   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
 │   ├── sample_client.py   # cliente falso com dados de exemplo realistas
+│   ├── inventory.py       # inventário EC2/EBS/snapshots/IPs em todas as regiões
+│   ├── pricing.py         # tabela de preços de referência
+│   ├── recommendations.py # regras de desperdício e economia estimada
 │   ├── report.py          # resumo, formatação e exportação CSV
 │   ├── sources.py         # fontes de dados (exemplo, perfil, várias contas)
 │   ├── dashboard/         # app Streamlit + preparação de dados (pandas)
