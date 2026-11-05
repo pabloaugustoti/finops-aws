@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Role somente leitura para o coletor FinOps. Implante este template em cada
+  conta que você quer monitorar. A conta "hub" (de onde o coletor roda)
+  assume esta role via sts:AssumeRole.
+
+Parameters:
+  TrustedAccountId:
+    Type: String
+    AllowedPattern: "^\\d{12}$"
+    Description: ID da conta hub, de onde o coletor vai assumir esta role.
+  ExternalId:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      (Opcional) Segredo compartilhado exigido no AssumeRole. Recomendado
+      quando a conta hub pertence a outra pessoa ou empresa.
+  RoleName:
+    Type: String
+    Default: FinOpsReadOnly
+
+Conditions:
+  HasExternalId: !Not [!Equals [!Ref ExternalId, ""]]
+
+Resources:
+  FinOpsReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Leitura de custos e inventário para o coletor FinOps (sem permissão de escrita).
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${TrustedAccountId}:root"
+            Action: sts:AssumeRole
+            Condition: !If
+              - HasExternalId
+              - StringEquals:
+                  sts:ExternalId: !Ref ExternalId
+              - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: finops-read-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CostExplorer
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostForecast
+                  - ce:GetDimensionValues
+                  - ce:GetTags
+                  - ce:GetAnomalies
+                  - ce:GetAnomalyMonitors
+                  - ce:GetReservationUtilization
+                  - ce:GetSavingsPlansUtilization
+                  - ce:GetRightsizingRecommendation
+                Resource: "*"
+              - Sid: Budgets
+                Effect: Allow
+                Action:
+                  - budgets:ViewBudget
+                  - budgets:DescribeBudgets
+                Resource: "*"
+              - Sid: ComputeOptimizer
+                Effect: Allow
+                Action:
+                  - compute-optimizer:GetEnrollmentStatus
+                  - compute-optimizer:GetEC2InstanceRecommendations
+                  - compute-optimizer:GetEBSVolumeRecommendations
+                  - compute-optimizer:GetLambdaFunctionRecommendations
+                Resource: "*"
+              - Sid: InventarioParaRecomendacoes
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeRegions
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: finops-aws
+
+Outputs:
+  RoleArn:
+    Description: ARN para colocar no accounts.local.toml
+    Value: !GetAtt FinOpsReadOnlyRole.Arn

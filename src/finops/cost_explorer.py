@@ -20,10 +20,15 @@ _UNAVAILABLE = {"_unavailable": True}
 
 
 class CostExplorer:
-    def __init__(self, client: Any, cache: JsonCache | None = None) -> None:
+    def __init__(self, client: Any, cache: JsonCache | None = None, account: str = "") -> None:
+        """`account` identifica a conta: rotula os registros e separa o cache de cada conta."""
         self._client = client
         self._cache = cache
+        self.account = account
         self.api_calls = 0
+
+    def cache_key(self, operation: str, params: dict[str, Any]) -> str:
+        return JsonCache.make_key(operation, {"account": self.account, "params": params})
 
     @property
     def estimated_api_cost(self) -> Decimal:
@@ -40,7 +45,7 @@ class CostExplorer:
             "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
         }
         response = self._request("get_cost_and_usage", params)
-        return _parse_cost_and_usage(response)
+        return _parse_cost_and_usage(response, self.account)
 
     def forecast(self, start: date, end: date) -> Forecast | None:
         """Previsão de gasto entre `start` (hoje ou depois) e `end`.
@@ -60,7 +65,7 @@ class CostExplorer:
         return Forecast(start=start, end=end, amount=Decimal(total["Amount"]), unit=total["Unit"])
 
     def _request(self, operation: str, params: dict[str, Any]) -> dict[str, Any]:
-        key = JsonCache.make_key(operation, params)
+        key = self.cache_key(operation, params)
         if self._cache is not None:
             cached = self._cache.get(key)
             if cached is not None:
@@ -97,7 +102,7 @@ def _is_final(operation: str, response: dict[str, Any]) -> bool:
     return not any(result.get("Estimated") for result in response.get("ResultsByTime", []))
 
 
-def _parse_cost_and_usage(response: dict[str, Any]) -> list[CostRecord]:
+def _parse_cost_and_usage(response: dict[str, Any], account: str = "") -> list[CostRecord]:
     records: list[CostRecord] = []
     for result in response.get("ResultsByTime", []):
         day = date.fromisoformat(result["TimePeriod"]["Start"])
@@ -111,6 +116,7 @@ def _parse_cost_and_usage(response: dict[str, Any]) -> list[CostRecord]:
                     amount=Decimal(metric["Amount"]),
                     unit=metric["Unit"],
                     estimated=estimated,
+                    account=account,
                 )
             )
     return records

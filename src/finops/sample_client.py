@@ -33,19 +33,29 @@ SPIKE_SERVICE = EC2_COMPUTE
 SPIKE_AGE_DAYS = range(10, 13)
 SPIKE_FACTOR = 2.4
 
+# Contas fictícias usadas no modo de exemplo: nome -> (seed, escala, tem pico)
+SAMPLE_ACCOUNTS: dict[str, tuple[int, float, bool]] = {
+    "producao": (42, 1.0, True),
+    "desenvolvimento": (7, 0.35, False),
+    "dados": (13, 0.2, False),
+}
+
 
 class SampleCostExplorerClient:
-    def __init__(self, today: date, seed: int = 42) -> None:
+    def __init__(self, today: date, seed: int = 42, scale: float = 1.0, spike: bool = True) -> None:
+        """`scale` multiplica todos os custos; `spike` liga o pico simulado de EC2."""
         self.today = today
         self.seed = seed
+        self.scale = scale
+        self.spike = spike
 
     def daily_cost(self, day: date, service: str) -> Decimal:
         base, weekend_factor, growth = SERVICES[service]
         age = (self.today - day).days
-        value = base * (1 + growth) ** (-age)
+        value = base * self.scale * (1 + growth) ** (-age)
         if day.weekday() >= 5:
             value *= weekend_factor
-        if service == SPIKE_SERVICE and age in SPIKE_AGE_DAYS:
+        if self.spike and service == SPIKE_SERVICE and age in SPIKE_AGE_DAYS:
             value *= SPIKE_FACTOR
         rng = random.Random(f"{self.seed}:{day.isoformat()}:{service}")
         value *= rng.uniform(0.92, 1.08)

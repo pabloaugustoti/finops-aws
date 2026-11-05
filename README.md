@@ -45,7 +45,7 @@ flowchart LR
   - [x] Budget com alerta e Cost Explorer ativado
   - [x] Acesso pelo CLI com credenciais temporárias (`aws login`) e primeira consulta de custos pela API
 - [x] **Fase 2: Coletor de uma conta**: Python + boto3 lendo o Cost Explorer, com cache e modo de dados de exemplo
-- [ ] **Fase 3: Várias contas**: arquivo de configuração das contas e `sts:AssumeRole` em roles somente leitura
+- [x] **Fase 3: Várias contas**: role `FinOpsReadOnly` em CloudFormation, arquivo de contas e `sts:AssumeRole`
 - [ ] **Fase 4: Dashboard**: Streamlit com visão por conta, serviço, tendência e previsão
 - [ ] **Fase 5: Recomendações**
   - [ ] Volumes EBS gp2 que podem virar gp3
@@ -69,7 +69,11 @@ python -m venv .venv
 # Resumo da sua conta (cada chamada nova ao Cost Explorer custa US$ 0,01; repetições vêm do cache)
 .\.venv\Scripts\python.exe -m finops resumo --fonte aws --perfil finops-lab --dias 30
 
-# Exportar custos diários por serviço
+# Várias contas via AssumeRole (configure accounts.local.toml antes)
+.\.venv\Scripts\python.exe -m finops verificar-contas
+.\.venv\Scripts\python.exe -m finops resumo --fonte contas
+
+# Exportar custos diários por conta e serviço
 .\.venv\Scripts\python.exe -m finops resumo --csv data/exports/custos.csv
 
 # Testes
@@ -97,6 +101,17 @@ Custo diário (últimos 14 dias):  ▁▁▅▆█▁▁▁▁▁▁▁▁▁
   Dia mais caro: 2026-10-26 com US$ 65,74
 ```
 
+## Adicionar uma conta para monitorar
+
+1. Na conta que será monitorada, implante a role somente leitura, informando o ID da conta hub (de onde o coletor roda):
+   ```powershell
+   aws cloudformation deploy --template-file infra/cloudformation/finops-readonly-role.yaml `
+     --stack-name finops-readonly-role --capabilities CAPABILITY_NAMED_IAM `
+     --parameter-overrides TrustedAccountId=<ID_DA_CONTA_HUB> --profile <perfil-da-conta>
+   ```
+2. Adicione a conta em `accounts.local.toml` (copie de [`accounts.example.toml`](accounts.example.toml)).
+3. Teste com `python -m finops verificar-contas`.
+
 ## Princípios de segurança
 
 1. **Nenhuma credencial no repositório.** O acesso usa perfis do AWS CLI com credenciais temporárias (`aws login`), nunca chaves no código.
@@ -111,6 +126,7 @@ Cada etapa fica registrada em [`docs/diario/`](docs/diario/):
 - [01: Preparação do ambiente](docs/diario/01-preparacao-ambiente.md)
 - [02: Conta AWS e primeiro acesso pela API](docs/diario/02-conta-aws-e-primeiro-acesso.md)
 - [03: Coletor do Cost Explorer com cache](docs/diario/03-coletor-cost-explorer.md)
+- [04: Várias contas com AssumeRole](docs/diario/04-multi-conta-assume-role.md)
 
 ## Estrutura
 
@@ -119,7 +135,11 @@ finops-aws/
 ├── docs/
 │   ├── diario/            # registro de cada etapa
 │   └── checklist-conta-aws.md
+├── infra/cloudformation/  # role FinOpsReadOnly para cada conta monitorada
 ├── src/finops/
+│   ├── accounts.py        # leitura e validação do accounts.local.toml
+│   ├── aws_session.py     # perfil do CLI e AssumeRole
+│   ├── collector.py       # coleta de várias contas, isolando falhas
 │   ├── cost_explorer.py   # acesso à API, paginação e cache
 │   ├── cache.py           # cache em disco (estimado expira, fechado é permanente)
 │   ├── sample_client.py   # cliente falso com dados de exemplo realistas

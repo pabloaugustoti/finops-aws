@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from finops.cli import main
 from finops.cost_explorer import CostExplorer
-from finops.models import CostRecord, Forecast
+from finops.models import CostRecord
 from finops.report import build_summary, fmt_usd, sparkline
 from finops.sample_client import EC2_COMPUTE, SERVICES, SampleCostExplorerClient
 
@@ -46,8 +46,7 @@ def test_build_summary_totals():
         CostRecord(date(2026, 11, 3), "B", Decimal("20"), "USD", True),
         CostRecord(date(2026, 10, 1), "C", Decimal("99"), "USD", False),  # fora da janela de 7 dias
     ]
-    forecast = Forecast(TODAY, date(2026, 12, 1), Decimal("100"), "USD")
-    summary = build_summary(records, today=TODAY, days=7, forecast=forecast)
+    summary = build_summary(records, today=TODAY, days=7, forecast_amount=Decimal("100"))
 
     assert summary.total == Decimal("35")
     assert summary.by_service == [("B", Decimal("20")), ("A", Decimal("15"))]
@@ -58,7 +57,7 @@ def test_build_summary_totals():
 
 
 def test_build_summary_empty_account():
-    summary = build_summary([], today=TODAY, days=30, forecast=None)
+    summary = build_summary([], today=TODAY, days=30, forecast_amount=None)
     assert summary.total == 0
     assert summary.by_service == []
     assert summary.month_forecast is None
@@ -81,7 +80,8 @@ def test_cli_sample_summary(capsys, tmp_path):
     assert "Top serviços" in out
     assert EC2_COMPUTE in out
     assert "Previsão de fechamento .. US$" in out
-    assert csv_path.read_text(encoding="utf-8").startswith("dia,servico,custo")
+    assert "Por conta:" in out and "producao" in out and "desenvolvimento" in out
+    assert csv_path.read_text(encoding="utf-8").startswith("dia,conta,servico,custo")
 
 
 def test_cli_rejects_invalid_days(capsys):
